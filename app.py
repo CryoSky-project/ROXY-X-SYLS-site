@@ -203,7 +203,7 @@ async def download_patch(file_id: int):
             
     if not file_info:
         # Fallback to default GitHub release URL if nothing in DB
-        default_cdn = "https://github.com/Cryosky399/ROXY-X-SYLS-site/releases/download/patches/lib.zip"
+        default_cdn = "https://github.com/CryoSky-project/SKYLS-X-HACK-site/releases/download/patches/lib.zip"
         return RedirectResponse(url=default_cdn, status_code=307)
         
     file_name = file_info[0]
@@ -230,7 +230,7 @@ async def download_patch(file_id: int):
             }
         )
         
-    default_cdn = "https://github.com/Cryosky399/ROXY-X-SYLS-site/releases/download/patches/lib.zip"
+    default_cdn = "https://github.com/CryoSky-project/SKYLS-X-HACK-site/releases/download/patches/lib.zip"
     return RedirectResponse(url=default_cdn, status_code=307)
 
 # Telegram Notification Helper
@@ -1188,7 +1188,7 @@ async def admin_dashboard():
                         </div>
                         <div class="form-group" style="margin-bottom: 0;">
                             <label>GitHub / CDN Direct Download URL</label>
-                            <input type="url" id="extFileUrl" class="form-control" placeholder="https://github.com/Cryosky399/.../releases/download/.../lib.zip">
+                            <input type="url" id="extFileUrl" class="form-control" placeholder="https://github.com/CryoSky-project/.../releases/download/.../lib.zip">
                         </div>
                         <button class="btn btn-success" style="height: 42px;" onclick="addExternalFile()">+ ADD LINK</button>
                     </div>
@@ -1318,7 +1318,7 @@ async def admin_dashboard():
                     </div>
                     <div class="form-group">
                         <label>GitHub Repository (Owner/Repo)</label>
-                        <input type="text" id="ghRepoInput" class="form-control" placeholder="Cryosky399/ROXY-X-SYLS-site">
+                        <input type="text" id="ghRepoInput" class="form-control" placeholder="CryoSky-project/SKYLS-X-HACK-site">
                     </div>
                     <button class="btn btn-success" id="btnSaveGhSettings" onclick="saveGithubSettings()">💾 SAVE GITHUB SETTINGS</button>
                 </div>

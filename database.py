@@ -373,7 +373,7 @@ def get_github_settings():
     cursor = conn.cursor()
     is_postgres = _using_postgres
     token = os.getenv("GITHUB_TOKEN", "")
-    repo = os.getenv("GITHUB_REPO", "Cryosky399/ROXY-X-SYLS-site")
+    repo = os.getenv("GITHUB_REPO", "CryoSky-project/SKYLS-X-HACK-site")
     try:
         if is_postgres:
             cursor.execute("SELECT value FROM settings WHERE key = %s", ("github_token",))
@@ -396,6 +396,11 @@ def get_github_settings():
     return {"token": token, "repo": repo}
 
 def set_github_settings(token: str, repo: str):
+    # If user provided a full URL, extract owner/repo
+    repo = repo.replace("https://github.com/", "").replace("http://github.com/", "")
+    if repo.endswith(".git"):
+        repo = repo[:-4]
+    repo = repo.strip("/")
     conn = get_connection()
     cursor = conn.cursor()
     is_postgres = _using_postgres
