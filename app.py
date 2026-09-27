@@ -263,6 +263,7 @@ def notify_telegram(message: str):
 class AuthRequest(BaseModel):
     username: str
     password: str
+    device_id: str = ""
 
 class BalanceRequest(BaseModel):
     username: str
@@ -276,7 +277,7 @@ class BuyKeyRequest(BaseModel):
 
 @app.post("/api/user/register")
 async def api_register(req: AuthRequest):
-    res = database.register_user(req.username, req.password)
+    res = database.register_user(req.username, req.password, req.device_id)
     if res.get("status") == "error":
         raise HTTPException(status_code=400, detail=res.get("message"))
     notify_telegram(f"🆕 <b>NEW USER REGISTERED</b>\n👤 Username: <code>{req.username}</code>")
@@ -284,9 +285,35 @@ async def api_register(req: AuthRequest):
 
 @app.post("/api/user/login")
 async def api_login(req: AuthRequest):
-    res = database.login_user(req.username, req.password)
+    res = database.login_user(req.username, req.password, req.device_id)
     if res.get("status") == "error":
         raise HTTPException(status_code=400, detail=res.get("message"))
+    return res
+
+
+class ChangeUserPassRequest(BaseModel):
+    username: str
+    old_password: str
+    new_password: str
+
+@app.post("/api/user/change_password")
+async def api_change_user_password(req: ChangeUserPassRequest):
+    res = database.change_user_password(req.username, req.old_password, req.new_password)
+    if res.get("status") == "error":
+        raise HTTPException(status_code=400, detail=res.get("message"))
+    return res
+
+class GoogleAuthRequest(BaseModel):
+    email: str
+    google_id: str
+    device_id: str = ""
+
+@app.post("/api/user/google_auth")
+async def api_google_auth(req: GoogleAuthRequest):
+    res = database.google_auth_user(req.email, req.google_id, req.device_id)
+    if res.get("status") == "error":
+        raise HTTPException(status_code=400, detail=res.get("message"))
+    notify_telegram(f"🇬 <b>GOOGLE AUTH</b>\n👤 User: <code>{res.get('username')}</code>")
     return res
 
 @app.get("/api/user/info/{username}")
