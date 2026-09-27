@@ -730,7 +730,7 @@ def delete_key(key: str):
     conn.commit()
     conn.close()
 
-def get_all_users():
+def get_active_devices():
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""

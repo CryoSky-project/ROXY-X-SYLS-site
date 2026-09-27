@@ -401,14 +401,12 @@ async def admin_unmute_user(req: BanRequest, authenticated: bool = Depends(verif
 async def admin_get_stats(authenticated: bool = Depends(verify_admin)):
     stats = database.get_db_stats()
     keys = database.get_all_keys()
-    users = database.get_all_users()
+    users = database.get_active_devices()
     stats["total_keys"] = len(keys)
     stats["total_users"] = len(users)
     return stats
 
-@app.get("/api/admin/users")
-async def admin_get_users(authenticated: bool = Depends(verify_admin)):
-    return database.get_all_users()
+
 
 @app.post("/api/admin/set_balance")
 async def admin_set_balance(req: BalanceRequest, authenticated: bool = Depends(verify_admin)):
@@ -453,6 +451,21 @@ async def admin_get_files(authenticated: bool = Depends(verify_admin)):
             "external_url": ext_url
         })
     return files_list
+
+def delete_file_from_github_release(file_name: str):
+    gh_cfg = database.get_github_settings()
+    token = gh_cfg.get("token")
+    repo = gh_cfg.get("repo")
+    if not token or not repo: return
+    headers = {"Authorization": f"token {token}", "Accept": "application/vnd.github.v3+json"}
+    try:
+        rel_res = requests.get(f"https://api.github.com/repos/{repo}/releases/tags/patches", headers=headers, timeout=10)
+        if rel_res.status_code == 200:
+            for asset in rel_res.json().get("assets", []):
+                if asset.get("name") == file_name:
+                    requests.delete(asset.get("url"), headers=headers, timeout=10)
+                    break
+    except: pass
 
 def upload_file_to_github_release(file_name: str, file_bytes: bytes) -> str:
     gh_cfg = database.get_github_settings()
@@ -565,6 +578,21 @@ async def admin_upload_file(file: UploadFile = File(...), authenticated: bool = 
         "mode": "GitHub CDN" if cdn_url else "Server Disk Cache"
     }
 
+@app.post("/api/admin/upload_org_lib")
+async def admin_upload_org_lib(file: UploadFile = File(...), authenticated: bool = Depends(verify_admin)):
+    try:
+        os.makedirs(CACHE_DIR, exist_ok=True)
+        file_path = os.path.join(CACHE_DIR, f"org_{file.filename}")
+        with open(file_path, "wb") as f:
+            f.write(await file.read())
+        # In a real setup this should be a served static URL, 
+        # but here we just store the local path or dummy URL for now
+        url = f"http://YOUR_SERVER_IP/{file_path}"
+        database.set_org_lib_url(url)
+        return {"status": "success", "url": url}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/api/admin/add_external_file")
 async def admin_add_external_file(req: ExternalFileRequest, authenticated: bool = Depends(verify_admin)):
     if not req.download_url or not req.download_url.startswith("http"):
@@ -674,9 +702,13 @@ async def admin_delete_key(key: str, authenticated: bool = Depends(verify_admin)
     database.delete_key(key)
     return {"status": "success", "message": f"Key {key} deleted"}
 
+@app.get("/api/admin/app_users")
+async def admin_get_app_users(authenticated: bool = Depends(verify_admin)):
+    return database.get_all_users()
+
 @app.get("/api/admin/users")
 async def admin_get_users(authenticated: bool = Depends(verify_admin)):
-    users = database.get_all_users()
+    users = database.get_active_devices()
     users_list = []
     for row in users:
         uid, key, device_id, act_at, exp_at, fname, is_banned, is_muted = row
@@ -724,14 +756,14 @@ async def admin_dashboard():
             body::before, body::after {
                 content: ''; position: fixed; top: 50%; left: 50%; width: 70vw; height: 70vw;
                 border-radius: 50%; transform: translate(-50%, -50%); filter: blur(120px); opacity: 0.6; z-index: -1;
-                animation: spinGlow 15s linear infinite; pointer-events: none;
+                animation: spinGlow 15s linear infinite; pointer-events: none; mix-blend-mode: screen;
             }
             body::before { background: radial-gradient(circle, rgba(0,240,255,0.4), transparent 60%); margin-left: -15vw; }
             body::after { background: radial-gradient(circle, rgba(178,0,255,0.4), transparent 60%); margin-left: 15vw; animation-direction: reverse; animation-duration: 20s; }
             @keyframes spinGlow { 100% { transform: translate(-50%, -50%) rotate(360deg); } }
             
             body { 
-                background: #000000;
+                background: radial-gradient(circle at top, #111 0%, #000 70%); background-size: cover; background-attachment: fixed;
                 color: var(--text); 
                 padding-bottom: 40px; 
                 min-height: 100vh;
@@ -1149,7 +1181,7 @@ async def admin_dashboard():
                             <label>Patch File URL</label>
                             <input type="url" id="patchUrlInput" class="form-control" placeholder="https://example.com/lib.zip">
                         </div>
-                        <button class="btn btn-success" style="height: 42px;" onclick="alert('Feature placeholder: adding URL patch')">ADD URL</button>
+                        <button class="btn btn-success" style="height: 42px;" onclick="addPatchUrl()">ADD URL</button>
                     </div>
 
                     <div id="patchFileMode">
@@ -1198,9 +1230,31 @@ async def admin_dashboard():
 
             <!-- USERS TAB -->
             <div id="usersTab" class="tab-content" style="display: none;">
+                
+                <div class="card" style="margin-bottom: 20px;">
+                    <div class="card-header">
+                        <span class="card-title" style="color: var(--cyan);">👤 ТІРКЕЛГЕН ҚОЛДАНУШЫЛАР (APP USERS)</span>
+                    </div>
+                    <div class="table-responsive">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Логин (Username)</th>
+                                    <th>Баланс (Balance)</th>
+                                    <th>Рөлі (Role)</th>
+                                    <th>Тіркелді (Created At)</th>
+                                </tr>
+                            </thead>
+                            <tbody id="appUsersTableBody">
+                                <!-- Dynamic -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
                 <div class="card">
                     <div class="card-header">
-                        <span class="card-title" id="txtUsersTitle">ACTIVE USERS & BAN SYSTEM</span>
+                        <span class="card-title" id="txtUsersTitle">📱 АКТИВТІ ҚҰРЫЛҒЫЛАР (ACTIVE DEVICES)</span>
                     </div>
                     <div class="table-responsive">
                         <table>
@@ -1319,24 +1373,24 @@ async def admin_dashboard():
                     <select id="genFileSelect" class="form-control"></select>
                 </div>
                 <div class="form-group">
-                    <label>Expiration Mode</label>
+                    <label>Кілттің біту уақытын таңдау (Expiration Mode)</label>
                     <select id="genExpMode" class="form-control" onchange="toggleExpMode()">
-                        <option value="days">Mode 1: Duration (Days)</option>
-                        <option value="minutes">Mode 2: Duration (Minutes)</option>
-                        <option value="exact">Mode 3: Exact Date & Time</option>
+                        <option value="days">1. Қолмен Күн жазу (Duration Days)</option>
+                        <option value="minutes">2. Минут қосу (Duration Minutes)</option>
+                        <option value="exact">3. Күнді Календарьдан таңдау (Exact Date)</option>
                     </select>
                 </div>
                 <div class="form-group" id="grpExpDays">
-                    <label>Duration (Days)</label>
+                    <label>Қанша күннен соң бітеді? (Days)</label>
                     <input type="number" id="genDays" class="form-control" value="3" min="1">
                 </div>
                 <div class="form-group" id="grpExpMins" style="display:none;">
-                    <label>Duration (Minutes)</label>
+                    <label>Қанша минуттан соң бітеді? (Minutes)</label>
                     <input type="number" id="genMins" class="form-control" value="60" min="1">
                 </div>
                 <div class="form-group" id="grpExpExact" style="display:none;">
-                    <label>Exact Expiration Time</label>
-                    <input type="datetime-local" id="genExact" class="form-control">
+                    <label>Нақты қай күні және қай сағатта/минутта бітеді?</label>
+                    <input type="datetime-local" id="genExact" class="form-control" style="background: var(--surface); color: var(--text); border: 1px solid var(--border); padding: 10px; border-radius: 6px; width: 100%;">
                 </div>
                 <div class="form-group">
                     <label>Max Devices</label>
@@ -1686,6 +1740,23 @@ async def admin_dashboard():
             }
 
             function loadUsers() {
+                fetch("/api/admin/app_users", { headers: { "Authorization": `Bearer ${adminToken}` } })
+                .then(r => r.json())
+                .then(data => {
+                    const tApp = document.getElementById("appUsersTableBody");
+                    if (tApp) {
+                        tApp.innerHTML = "";
+                        data.forEach(u => {
+                            tApp.innerHTML += `<tr>
+                                <td>${u.username}</td>
+                                <td style="color:var(--green)">$${u.balance.toFixed(2)}</td>
+                                <td>${u.role}</td>
+                                <td>${u.created_at.split('.')[0]}</td>
+                            </tr>`;
+                        });
+                    }
+                }).catch(e => console.error(e));
+
                 fetch("/api/admin/users", { headers: { "Authorization": `Bearer ${adminToken}` } })
                 .then(r => r.json())
                 .then(data => {
@@ -2024,6 +2095,21 @@ async def admin_dashboard():
                 .then(data => {
                     if (data.url) document.getElementById("orgLibUrl").value = data.url;
                 });
+            }
+
+            async function addPatchUrl() {
+                const url = document.getElementById("patchUrlInput").value;
+                if (!url) return alert("Enter URL");
+                const fname = url.split('/').pop() || "patch.zip";
+                try {
+                    const res = await fetch("/api/admin/add_external_file", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
+                        body: JSON.stringify({ file_name: fname, download_url: url })
+                    });
+                    const data = await res.json();
+                    if(data.status==="success") { alert("Added!"); fetchFiles(); } else alert("Error");
+                } catch(e) {}
             }
 
             function saveOrgLibUrl() {
