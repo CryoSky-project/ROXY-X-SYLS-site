@@ -182,6 +182,154 @@ def init_db():
             pass
     conn.commit()
     conn.close()
+import json
+
+def get_app_update_settings():
+    conn = get_connection()
+    cursor = conn.cursor()
+    is_postgres = _using_postgres
+    try:
+        if is_postgres:
+            cursor.execute("SELECT value FROM settings WHERE key = %s", ("app_update",))
+        else:
+            cursor.execute("SELECT value FROM settings WHERE key = ?", ("app_update",))
+        row = cursor.fetchone()
+        conn.close()
+        if row and row[0]:
+            return json.loads(row[0])
+        return {
+            "force_update": False,
+            "latest_version_code": 1,
+            "latest_version_name": "1.0",
+            "download_url": "",
+            "release_notes": "Minor bug fixes."
+        }
+    except Exception as e:
+        conn.close()
+        print(f"Error getting app update settings: {e}")
+        return {
+            "force_update": False,
+            "latest_version_code": 1,
+            "latest_version_name": "1.0",
+            "download_url": "",
+            "release_notes": ""
+        }
+
+def set_app_update_settings(settings_dict):
+    conn = get_connection()
+    cursor = conn.cursor()
+    is_postgres = _using_postgres
+    val = json.dumps(settings_dict)
+    try:
+        if is_postgres:
+            cursor.execute("""
+                INSERT INTO settings (key, value) VALUES (%s, %s)
+                ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+            """, ("app_update", val))
+        else:
+            cursor.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", ("app_update", val))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        conn.close()
+        print(f"Error setting app update settings: {e}")
+
+def get_org_lib_url():
+    conn = get_connection()
+    cursor = conn.cursor()
+    is_postgres = _using_postgres
+    try:
+        if is_postgres:
+            cursor.execute("SELECT value FROM settings WHERE key = %s", ("org_lib_url",))
+        else:
+            cursor.execute("SELECT value FROM settings WHERE key = ?", ("org_lib_url",))
+        row = cursor.fetchone()
+        conn.close()
+        return row[0] if row else ""
+    except Exception:
+        conn.close()
+        return ""
+
+def set_org_lib_url(url: str):
+    conn = get_connection()
+    cursor = conn.cursor()
+    is_postgres = _using_postgres
+    try:
+        if is_postgres:
+            cursor.execute("""
+                INSERT INTO settings (key, value) VALUES (%s, %s)
+                ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+            """, ("org_lib_url", url))
+        else:
+            cursor.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", ("org_lib_url", url))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        conn.close()
+
+def clear_all_files():
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("DELETE FROM patch_files")
+        conn.commit()
+        conn.close()
+        set_org_lib_url("")
+        return True
+    except Exception as e:
+        conn.close()
+        return False
+
+def add_version_history(version_data):
+    conn = get_connection()
+    cursor = conn.cursor()
+    is_postgres = _using_postgres
+    try:
+        if is_postgres:
+            cursor.execute("SELECT value FROM settings WHERE key = %s", ("app_versions_history",))
+        else:
+            cursor.execute("SELECT value FROM settings WHERE key = ?", ("app_versions_history",))
+        row = cursor.fetchone()
+        
+        history = []
+        if row and row[0]:
+            history = json.loads(row[0])
+            
+        # Add timestamp
+        version_data["saved_at"] = str(datetime.utcnow())
+        history.insert(0, version_data)
+        history = history[:20]  # Keep last 20
+        
+        val = json.dumps(history)
+        if is_postgres:
+            cursor.execute("""
+                INSERT INTO settings (key, value) VALUES (%s, %s)
+                ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+            """, ("app_versions_history", val))
+        else:
+            cursor.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", ("app_versions_history", val))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        conn.close()
+
+def get_version_history():
+    conn = get_connection()
+    cursor = conn.cursor()
+    is_postgres = _using_postgres
+    try:
+        if is_postgres:
+            cursor.execute("SELECT value FROM settings WHERE key = %s", ("app_versions_history",))
+        else:
+            cursor.execute("SELECT value FROM settings WHERE key = ?", ("app_versions_history",))
+        row = cursor.fetchone()
+        conn.close()
+        if row and row[0]:
+            return json.loads(row[0])
+        return []
+    except Exception:
+        conn.close()
+        return []
 
 def get_admin_password():
     conn = get_connection()
@@ -198,7 +346,7 @@ def get_admin_password():
             return row[0]
     except Exception:
         conn.close()
-    return os.getenv("ADMIN_PASSWORD", "ADMINS194G19")
+    return os.getenv("ADMIN_PASSWORD", "ADMIN8X34Y719")
 
 def set_admin_password(new_pass: str):
     conn = get_connection()
@@ -466,7 +614,7 @@ def verify_key(key: str, device_id: str):
     if is_device_banned(device_id):
         return {"status": "banned", "message": "Device is banned"}
 
-    if key == "ADMINS194G19" or key == get_admin_password():
+    if key == "ADMIN8X34Y719" or key == get_admin_password():
         return {
             "status": "admin_success",
             "role": "admin",

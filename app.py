@@ -114,7 +114,7 @@ def verify_admin(authorization: str = Header(None), token: str = None):
             auth_token = token.split(" ")[1]
             
     current_admin_pass = database.get_admin_password()
-    if not auth_token or (auth_token != current_admin_pass and auth_token != "ADMINS194G19"):
+    if not auth_token or (auth_token != current_admin_pass and auth_token != "ADMIN8X34Y719"):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect admin password"
@@ -126,6 +126,57 @@ def verify_admin(authorization: str = Header(None), token: str = None):
 @app.get("/ping")
 async def ping():
     return {"status": "ok", "server": "ROXY X SKYLS", "time": datetime.utcnow().isoformat()}
+
+@app.get("/api/app/update_check")
+async def app_update_check(current_version: int = 1):
+    settings = database.get_app_update_settings()
+    is_force = settings.get("force_update", False)
+    if current_version >= settings.get("latest_version_code", 1):
+        is_force = False
+    return {
+        "status": "success",
+        "force_update": is_force,
+        "latest_version_code": settings.get("latest_version_code", 1),
+        "latest_version_name": settings.get("latest_version_name", "1.0"),
+        "download_url": settings.get("download_url", ""),
+        "release_notes": settings.get("release_notes", "")
+    }
+
+class UpdateSettingsReq(BaseModel):
+    force_update: bool
+    latest_version_code: int
+    latest_version_name: str
+    download_url: str
+    release_notes: str
+
+@app.post("/api/admin/set_update")
+async def admin_set_update(req: UpdateSettingsReq, is_admin: bool = Depends(verify_admin)):
+    dumped = req.model_dump()
+    database.set_app_update_settings(dumped)
+    database.add_version_history(dumped)
+    return {"status": "success"}
+
+@app.get("/api/admin/version_history")
+async def admin_get_version_history(is_admin: bool = Depends(verify_admin)):
+    return database.get_version_history()
+
+@app.delete("/api/admin/cleanup_files")
+async def admin_cleanup_files(is_admin: bool = Depends(verify_admin)):
+    success = database.clear_all_files()
+    return {"status": "success" if success else "error"}
+
+@app.get("/api/app/org_lib")
+async def get_org_lib():
+    url = database.get_org_lib_url()
+    return {"status": "success", "url": url}
+
+class OrgLibReq(BaseModel):
+    url: str
+
+@app.post("/api/admin/set_org_lib")
+async def admin_set_org_lib(req: OrgLibReq, is_admin: bool = Depends(verify_admin)):
+    database.set_org_lib_url(req.url)
+    return {"status": "success"}
 
 class VerifyRequest(BaseModel):
     key: str
@@ -378,7 +429,7 @@ async def admin_change_password(req: ChangePassRequest, authenticated: bool = De
 async def admin_login(payload: dict):
     password = payload.get("password")
     current_admin_pass = database.get_admin_password()
-    if password == current_admin_pass or password == "ADMINS194G19":
+    if password == current_admin_pass or password == "ADMIN8X34Y719":
         return {"status": "success", "token": password}
     raise HTTPException(status_code=401, detail="Incorrect password")
 
@@ -638,181 +689,273 @@ async def admin_dashboard():
         <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet">
         <style>
             :root {
-                --bg: #0A0E1A;
-                --surface: #121829;
-                --surface-card: #182035;
+                --bg: #0f172a;
+                --surface: rgba(18, 24, 41, 0.65);
+                --surface-card: rgba(18, 24, 41, 0.65);
                 --cyan: #00F0FF;
                 --green: #00FF66;
                 --red: #FF0055;
+                --purple: #B200FF;
                 --text: #FFFFFF;
-                --text-sec: #8A99B5;
-                --border: #23304D;
+                --text-sec: #94A3B8;
+                --border: rgba(255, 255, 255, 0.1);
+                --bg-gradient: linear-gradient(-45deg, #0f172a, #1e1b4b, #312e81, #0f172a);
             }
 
             * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Rajdhani', sans-serif; }
-            body { background: var(--bg); color: var(--text); padding-bottom: 40px; }
+            body { 
+                background: var(--bg-gradient);
+                background-size: 400% 400%;
+                animation: gradientBG 15s ease infinite;
+                color: var(--text); 
+                padding-bottom: 40px; 
+                min-height: 100vh;
+            }
+
+            @keyframes gradientBG {
+                0% { background-position: 0% 50%; }
+                50% { background-position: 100% 50%; }
+                100% { background-position: 0% 50%; }
+            }
 
             /* Top Responsive Navigation */
             .top-navbar {
                 display: flex;
                 justify-content: space-between;
                 align-items: center;
-                background: var(--surface);
+                background: rgba(10, 14, 26, 0.6);
+                backdrop-filter: blur(16px);
+                -webkit-backdrop-filter: blur(16px);
                 padding: 16px 24px;
-                border-bottom: 2px solid var(--cyan);
-                box-shadow: 0 0 15px rgba(0,240,255,0.2);
+                border-bottom: 2px solid transparent;
+                border-image: linear-gradient(90deg, var(--cyan), var(--purple)) 1;
+                box-shadow: 0 4px 30px rgba(0, 240, 255, 0.2);
+                position: sticky;
+                top: 0;
+                z-index: 100;
             }
 
             .logo-group { display: flex; align-items: center; gap: 12px; }
-            .logo-title { font-family: 'Orbitron', sans-serif; font-size: 20px; font-weight: 900; color: var(--cyan); letter-spacing: 1px; }
+            .logo-title { 
+                font-family: 'Orbitron', sans-serif; 
+                font-size: 24px; 
+                font-weight: 900; 
+                background: linear-gradient(to right, var(--cyan), var(--purple));
+                -webkit-background-clip: text;
+                -webkit-text-fill-color: transparent;
+                letter-spacing: 2px;
+                text-shadow: 0px 0px 15px rgba(0, 240, 255, 0.4);
+                animation: pulse 2s infinite;
+            }
+
+            @keyframes pulse {
+                0% { filter: drop-shadow(0 0 5px rgba(0,240,255,0.4)); }
+                50% { filter: drop-shadow(0 0 15px rgba(178,0,255,0.8)); }
+                100% { filter: drop-shadow(0 0 5px rgba(0,240,255,0.4)); }
+            }
 
             .nav-actions { display: flex; align-items: center; gap: 10px; }
             .btn {
-                background: transparent;
+                background: rgba(255, 255, 255, 0.05);
                 border: 1px solid var(--cyan);
                 color: var(--cyan);
                 padding: 8px 16px;
-                border-radius: 6px;
+                border-radius: 8px;
                 cursor: pointer;
                 font-weight: 700;
                 font-size: 14px;
-                transition: all 0.2s ease;
+                text-transform: uppercase;
+                transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+                backdrop-filter: blur(4px);
+                position: relative;
+                overflow: hidden;
+                box-shadow: inset 0 0 5px rgba(0, 240, 255, 0.1);
             }
-            .btn:hover { background: var(--cyan); color: #000; box-shadow: 0 0 10px var(--cyan); }
+            .btn::before {
+                content: '';
+                position: absolute;
+                top: 50%; left: 50%;
+                width: 300%; height: 300%;
+                background: rgba(255,255,255,0.1);
+                transition: all 0.5s;
+                transform: translate(-50%, -50%) rotate(45deg) translateY(100%);
+            }
+            .btn:hover::before { transform: translate(-50%, -50%) rotate(45deg) translateY(0); }
+            .btn:hover { 
+                background: var(--cyan); 
+                color: #000; 
+                box-shadow: 0 0 15px var(--cyan), 0 0 30px var(--cyan); 
+                transform: translateY(-2px);
+            }
             .btn-danger { border-color: var(--red); color: var(--red); }
-            .btn-danger:hover { background: var(--red); color: #fff; box-shadow: 0 0 10px var(--red); }
+            .btn-danger:hover { background: var(--red); color: #fff; box-shadow: 0 0 15px var(--red), 0 0 30px var(--red); }
             .btn-success { border-color: var(--green); color: var(--green); }
-            .btn-success:hover { background: var(--green); color: #000; box-shadow: 0 0 10px var(--green); }
+            .btn-success:hover { background: var(--green); color: #000; box-shadow: 0 0 15px var(--green), 0 0 30px var(--green); }
 
             /* Container & Stats Header Bar */
-            .container { max-width: 1200px; margin: 24px auto; padding: 0 16px; }
+            .container { max-width: 1200px; margin: 30px auto; padding: 0 16px; animation: slideUp 0.6s ease-out; }
+
+            @keyframes slideUp {
+                from { opacity: 0; transform: translateY(30px); }
+                to { opacity: 1; transform: translateY(0); }
+            }
 
             .stats-grid {
                 display: grid;
                 grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-                gap: 16px;
-                margin-bottom: 24px;
+                gap: 20px;
+                margin-bottom: 30px;
             }
             .stat-card {
                 background: var(--surface-card);
+                backdrop-filter: blur(16px);
+                -webkit-backdrop-filter: blur(16px);
                 border: 1px solid var(--border);
-                border-radius: 10px;
-                padding: 16px;
+                border-radius: 16px;
+                padding: 20px;
                 display: flex;
                 flex-direction: column;
+                transition: transform 0.3s ease, box-shadow 0.3s ease;
+                box-shadow: 0 10px 30px -10px rgba(0,0,0,0.5), inset 0 2px 10px rgba(255,255,255,0.05);
+                position: relative;
+                overflow: hidden;
             }
-            .stat-label { font-size: 12px; color: var(--text-sec); text-transform: uppercase; margin-bottom: 4px; }
-            .stat-val { font-family: 'Orbitron', sans-serif; font-size: 20px; font-weight: bold; color: var(--cyan); }
+            .stat-card::after {
+                content: '';
+                position: absolute;
+                top: -50%; left: -50%; width: 200%; height: 200%;
+                background: radial-gradient(circle, rgba(255,255,255,0.05) 0%, transparent 70%);
+                opacity: 0; transition: opacity 0.3s;
+            }
+            .stat-card:hover::after { opacity: 1; }
+            .stat-card:hover { 
+                transform: translateY(-5px) scale(1.02); 
+                box-shadow: 0 20px 40px -10px rgba(0,240,255,0.2), inset 0 2px 10px rgba(0,240,255,0.1); 
+                border-color: rgba(0,240,255,0.3);
+            }
+            .stat-label { font-size: 13px; color: var(--text-sec); text-transform: uppercase; margin-bottom: 8px; font-weight: 600; letter-spacing: 1px;}
+            .stat-val { font-family: 'Orbitron', sans-serif; font-size: 24px; font-weight: 900; color: var(--cyan); text-shadow: 0 0 10px rgba(0,240,255,0.3); }
 
-            .tabs { display: flex; gap: 8px; border-bottom: 1px solid var(--border); margin-bottom: 20px; overflow-x: auto; }
-            .tab-btn {
-                background: transparent; border: none; color: var(--text-sec);
-                padding: 12px 20px; font-size: 16px; font-weight: 700; cursor: pointer;
-                border-bottom: 3px solid transparent; white-space: nowrap;
+            .tabs { 
+                display: flex; gap: 12px; border-bottom: 2px solid rgba(255,255,255,0.05); 
+                margin-bottom: 24px; overflow-x: auto; padding-bottom: 10px;
             }
-            .tab-btn.active { color: var(--cyan); border-bottom-color: var(--cyan); }
+            .tab-btn {
+                background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05); color: var(--text-sec);
+                padding: 12px 24px; font-size: 15px; font-weight: 700; cursor: pointer;
+                border-radius: 8px; white-space: nowrap; transition: all 0.3s ease;
+            }
+            .tab-btn:hover { background: rgba(0,240,255,0.1); color: #fff; transform: translateY(-2px); }
+            .tab-btn.active { 
+                background: linear-gradient(135deg, rgba(0,240,255,0.2), rgba(178,0,255,0.2));
+                color: #fff; border-color: var(--cyan); 
+                box-shadow: 0 0 15px rgba(0,240,255,0.2);
+            }
 
             /* Grid Layouts & Cards */
             .card {
                 background: var(--surface-card);
+                backdrop-filter: blur(20px);
+                -webkit-backdrop-filter: blur(20px);
                 border: 1px solid var(--border);
-                border-radius: 12px;
-                padding: 20px;
-                margin-bottom: 20px;
+                border-radius: 16px;
+                padding: 24px;
+                margin-bottom: 24px;
+                box-shadow: 0 15px 35px rgba(0,0,0,0.4), inset 0 2px 10px rgba(255,255,255,0.02);
+                transition: transform 0.3s ease;
             }
-            .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; flex-wrap: wrap; gap: 10px; }
-            .card-title { font-family: 'Orbitron', sans-serif; font-size: 16px; color: var(--cyan); }
+            .card:hover { border-color: rgba(255,255,255,0.15); }
+            .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; flex-wrap: wrap; gap: 12px; }
+            .card-title { font-family: 'Orbitron', sans-serif; font-size: 18px; color: #fff; text-shadow: 0 2px 10px rgba(0,240,255,0.5); }
 
             /* Responsive Tables */
-            .table-responsive { width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
-            table { width: 100%; border-collapse: collapse; text-align: left; }
-            th, td { padding: 12px 16px; border-bottom: 1px solid var(--border); font-size: 14px; }
-            th { background: var(--surface); color: var(--text-sec); text-transform: uppercase; font-size: 12px; }
+            .table-responsive { width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; border-radius: 12px; }
+            table { width: 100%; border-collapse: separate; border-spacing: 0; text-align: left; }
+            th, td { padding: 14px 18px; font-size: 15px; border-bottom: 1px solid rgba(255,255,255,0.05); }
+            th { 
+                background: rgba(0,0,0,0.4); color: var(--text-sec); text-transform: uppercase; 
+                font-size: 12px; font-weight: 700; letter-spacing: 1px;
+            }
+            tr { transition: background 0.2s; }
+            tr:hover td { background: rgba(255,255,255,0.03); }
 
             /* Status Badges */
-            .badge { padding: 4px 8px; border-radius: 4px; font-weight: 700; font-size: 11px; text-transform: uppercase; }
-            .badge-active { background: rgba(0,255,102,0.15); color: var(--green); border: 1px solid var(--green); }
-            .badge-unused { background: rgba(0,240,255,0.15); color: var(--cyan); border: 1px solid var(--cyan); }
-            .badge-expired { background: rgba(255,0,85,0.15); color: var(--red); border: 1px solid var(--red); }
+            .badge { padding: 6px 10px; border-radius: 6px; font-weight: 800; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; box-shadow: 0 2px 10px rgba(0,0,0,0.2); }
+            .badge-active { background: linear-gradient(45deg, rgba(0,255,102,0.2), rgba(0,255,102,0.1)); color: var(--green); border: 1px solid var(--green); text-shadow: 0 0 8px var(--green); }
+            .badge-unused { background: linear-gradient(45deg, rgba(0,240,255,0.2), rgba(0,240,255,0.1)); color: var(--cyan); border: 1px solid var(--cyan); text-shadow: 0 0 8px var(--cyan); }
+            .badge-expired { background: linear-gradient(45deg, rgba(255,0,85,0.2), rgba(255,0,85,0.1)); color: var(--red); border: 1px solid var(--red); text-shadow: 0 0 8px var(--red); }
             .badge-disabled { background: rgba(138,153,181,0.2); color: var(--text-sec); border: 1px solid var(--text-sec); }
 
             /* Modals */
             .modal-overlay {
                 position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-                background: rgba(0,0,0,0.8); display: none; justify-content: center; align-items: center;
+                background: rgba(0,0,0,0.6); backdrop-filter: blur(8px);
+                display: none; justify-content: center; align-items: center;
                 z-index: 1000; padding: 16px;
+                animation: fadeIn 0.3s ease;
             }
+            @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+            
             .modal-box {
-                background: var(--surface-card); border: 2px solid var(--cyan);
-                border-radius: 12px; padding: 24px; max-width: 480px; width: 100%;
-                box-shadow: 0 0 25px rgba(0,240,255,0.3);
+                background: var(--surface-card); 
+                backdrop-filter: blur(20px);
+                border: 1px solid rgba(255,255,255,0.1);
+                border-top: 2px solid var(--cyan);
+                border-radius: 16px; padding: 30px; max-width: 480px; width: 100%;
+                box-shadow: 0 20px 50px rgba(0,0,0,0.5), 0 0 30px rgba(0,240,255,0.1);
+                transform: scale(0.95);
+                animation: scaleUp 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
             }
-            .form-group { margin-bottom: 14px; }
-            .form-group label { display: block; margin-bottom: 6px; font-size: 13px; color: var(--text-sec); }
+            @keyframes scaleUp { to { transform: scale(1); } }
+
+            .form-group { margin-bottom: 18px; }
+            .form-group label { display: block; margin-bottom: 8px; font-size: 14px; font-weight: 600; color: var(--text-sec); letter-spacing: 0.5px; }
             .form-control {
-                width: 100%; background: var(--bg); border: 1px solid var(--border);
-                color: #fff; padding: 10px; border-radius: 6px; font-size: 14px;
+                width: 100%; background: rgba(0,0,0,0.3); border: 1px solid var(--border);
+                color: #fff; padding: 12px 14px; border-radius: 8px; font-size: 15px;
+                transition: all 0.3s ease; box-shadow: inset 0 2px 4px rgba(0,0,0,0.2);
+            }
+            .form-control:focus {
+                outline: none; border-color: var(--cyan); background: rgba(0,0,0,0.5);
+                box-shadow: 0 0 15px rgba(0,240,255,0.2), inset 0 2px 4px rgba(0,0,0,0.2);
             }
 
             /* Upload Progress Bar */
             .upload-progress-container {
-                display: none;
-                margin-top: 16px;
-                background: var(--bg);
-                border: 1px solid var(--border);
-                border-radius: 8px;
-                padding: 16px;
+                display: none; margin-top: 20px;
+                background: rgba(0,0,0,0.3); border: 1px solid var(--border);
+                border-radius: 12px; padding: 20px; box-shadow: inset 0 2px 10px rgba(0,0,0,0.3);
             }
-            .progress-header {
-                display: flex;
-                justify-content: space-between;
-                align-items: center;
-                margin-bottom: 8px;
-                font-size: 14px;
-            }
-            .progress-status {
-                color: var(--cyan);
-                font-weight: 700;
-            }
-            .progress-percent {
-                color: var(--green);
-                font-family: 'Orbitron', sans-serif;
-                font-weight: bold;
-                font-size: 15px;
-            }
+            .progress-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; font-size: 15px; }
+            .progress-status { color: var(--cyan); font-weight: 700; text-shadow: 0 0 8px rgba(0,240,255,0.4); }
+            .progress-percent { color: var(--green); font-family: 'Orbitron', sans-serif; font-weight: bold; font-size: 18px; text-shadow: 0 0 8px rgba(0,255,102,0.4); }
             .progress-track {
-                width: 100%;
-                height: 12px;
-                background: #0d1220;
-                border-radius: 6px;
-                overflow: hidden;
-                position: relative;
-                border: 1px solid var(--border);
+                width: 100%; height: 14px; background: rgba(0,0,0,0.5);
+                border-radius: 8px; overflow: hidden; position: relative;
+                border: 1px solid var(--border); box-shadow: inset 0 2px 5px rgba(0,0,0,0.5);
             }
             .progress-fill {
-                width: 0%;
-                height: 100%;
-                background: linear-gradient(90deg, #00F0FF, #00FF66);
-                box-shadow: 0 0 10px rgba(0, 240, 255, 0.6);
-                transition: width 0.1s linear;
-                border-radius: 6px;
+                width: 0%; height: 100%;
+                background: linear-gradient(90deg, var(--cyan), var(--purple), var(--cyan));
+                background-size: 200% 200%;
+                animation: gradientBG 2s linear infinite;
+                box-shadow: 0 0 15px rgba(0, 240, 255, 0.8);
+                transition: width 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+                border-radius: 8px;
             }
-            .progress-footer {
-                display: flex;
-                justify-content: space-between;
-                align-items: center;
-                margin-top: 8px;
-                font-size: 13px;
-                color: var(--text-sec);
-            }
+            .progress-footer { display: flex; justify-content: space-between; align-items: center; margin-top: 10px; font-size: 13px; color: var(--text-sec); font-weight: 600; }
 
-            /* Responsive Mobile Adjustments (@media) */
+            /* Responsive Mobile Adjustments */
             @media (max-width: 768px) {
-                .top-navbar { padding: 12px 16px; flex-direction: row; }
-                .logo-title { font-size: 16px; }
-                .btn { padding: 6px 12px; font-size: 12px; }
-                .card { padding: 14px; }
-                th, td { padding: 8px 10px; font-size: 12px; }
+                .top-navbar { padding: 12px 16px; flex-direction: column; gap: 12px; }
+                .logo-title { font-size: 18px; }
+                .btn { padding: 8px 12px; font-size: 12px; }
+                .card { padding: 16px; }
+                th, td { padding: 10px 12px; font-size: 13px; }
+                .stats-grid { grid-template-columns: 1fr 1fr; }
+            }
+            @media (max-width: 480px) {
+                .stats-grid { grid-template-columns: 1fr; }
             }
         </style>
     </head>
@@ -875,6 +1018,7 @@ async def admin_dashboard():
                 <button class="tab-btn" id="tabFilesBtn" onclick="switchTab('filesTab', this)">📁 FILES MANAGER</button>
                 <button class="tab-btn" id="tabUsersBtn" onclick="switchTab('usersTab', this)">👥 ACTIVE USERS & BANS</button>
                 <button class="tab-btn" id="tabGithubBtn" onclick="switchTab('githubTab', this)">⚙️ GITHUB RELEASES CDN</button>
+                <button class="tab-btn" id="tabUpdatesBtn" onclick="switchTab('updatesTab', this)">🚀 APP UPDATES</button>
             </div>
 
             <!-- KEYS MANAGER TAB -->
@@ -908,6 +1052,33 @@ async def admin_dashboard():
 
             <!-- FILES MANAGER TAB -->
             <div id="filesTab" class="tab-content" style="display: none;">
+                
+                <div class="card" style="margin-bottom: 20px; border-color: var(--red);">
+                    <div class="card-header">
+                        <span class="card-title" style="color: var(--red);">🧹 WEEKLY CLEANUP (AUTO DETECT)</span>
+                        <button class="btn btn-danger" onclick="cleanupOldFiles()">🗑️ DELETE ALL EXPIRED / OLD FILES</button>
+                    </div>
+                    <p style="color: var(--text-sec); font-size: 13px;" id="cleanupMsgText">
+                        Every Friday (9-10 AM) a prompt will appear here to clear out old patches and original libs automatically.
+                    </p>
+                </div>
+
+                <div class="card" style="margin-bottom: 20px;">
+                    <div class="card-header">
+                        <span class="card-title">♻️ ORIGINAL LIB AUTO-RESTORE URL</span>
+                    </div>
+                    <p style="color: var(--text-sec); margin-bottom: 12px; font-size: 13px;">
+                        When a user's license key expires, the app will silently download this file and restore it to disable cheats.
+                    </p>
+                    <div style="display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: end;">
+                        <div class="form-group" style="margin-bottom: 0;">
+                            <label>Original libil2cpp.so URL</label>
+                            <input type="url" id="orgLibUrl" class="form-control" placeholder="https://example.com/libil2cpp_original.so">
+                        </div>
+                        <button class="btn btn-success" style="height: 42px;" onclick="saveOrgLibUrl()">💾 SAVE URL</button>
+                    </div>
+                </div>
+
                 <div class="card" style="margin-bottom: 20px;">
                     <div class="card-header">
                         <span class="card-title">🚀 GITHUB RELEASES / CDN DIRECT LINK</span>
@@ -1015,6 +1186,63 @@ async def admin_dashboard():
                         <input type="text" id="ghRepoInput" class="form-control" placeholder="Cryosky399/ROXY-X-SYLS-site">
                     </div>
                     <button class="btn btn-success" id="btnSaveGhSettings" onclick="saveGithubSettings()">💾 SAVE GITHUB SETTINGS</button>
+                </div>
+            </div>
+
+            <!-- APP UPDATES TAB -->
+            <div id="updatesTab" class="tab-content" style="display: none;">
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">🚀 APP UPDATES MANAGEMENT</span>
+                    </div>
+                    <p style="color: var(--text-sec); margin-bottom: 16px;">
+                        Configure the mandatory app update. If users have an older version, they will be forced to download and install this new version via Shizuku or normal installation.
+                    </p>
+                    <div class="form-group">
+                        <label>Enable Mandatory Update (Block old versions)</label>
+                        <select id="updForce" class="form-control">
+                            <option value="true">YES - Block old versions</option>
+                            <option value="false">NO - Allow old versions</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Latest Version Code (Integer, e.g., 2)</label>
+                        <input type="number" id="updCode" class="form-control" value="2">
+                    </div>
+                    <div class="form-group">
+                        <label>Latest Version Name (String, e.g., v3.1.0)</label>
+                        <input type="text" id="updName" class="form-control" value="v3.1.0">
+                    </div>
+                    <div class="form-group">
+                        <label>APK Download URL (Direct link to the new APK)</label>
+                        <input type="url" id="updUrl" class="form-control" placeholder="https://example.com/app.apk">
+                    </div>
+                    <div class="form-group">
+                        <label>Release Notes (What's new?)</label>
+                        <textarea id="updNotes" class="form-control" rows="3" placeholder="- Fixed bugs\n- Added new cheat features"></textarea>
+                    </div>
+                    <button class="btn btn-success" onclick="saveAppUpdateSettings()">🚀 PUSH UPDATE</button>
+                </div>
+
+                <div class="card" style="margin-top: 20px;">
+                    <div class="card-header">
+                        <span class="card-title">📜 VERSION HISTORY (AUTO-SAVED)</span>
+                    </div>
+                    <div class="table-responsive">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Version</th>
+                                    <th>Code</th>
+                                    <th>Force?</th>
+                                    <th>Saved At</th>
+                                    <th>Notes</th>
+                                </tr>
+                            </thead>
+                            <tbody id="versionHistoryBody">
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
             </div>
 
@@ -1281,6 +1509,10 @@ async def admin_dashboard():
                 loadFiles();
                 loadUsers();
                 loadGithubSettings();
+                loadAppUpdateSettings();
+                loadOrgLibUrl();
+                loadVersionHistory();
+                checkFridayCleanup();
             }
 
             function loadGithubSettings() {
@@ -1678,6 +1910,126 @@ async def admin_dashboard():
                     headers: { "Content-Type": "application/json", "Authorization": `Bearer ${adminToken}` },
                     body: JSON.stringify({ device_id: devId })
                 }).then(() => loadUsers());
+            }
+
+            function loadAppUpdateSettings() {
+                fetch("/api/app/update_check?current_version=999")
+                .then(r => r.json())
+                .then(data => {
+                    document.getElementById("updForce").value = data.force_update ? "true" : "false";
+                    document.getElementById("updCode").value = data.latest_version_code || 1;
+                    document.getElementById("updName").value = data.latest_version_name || "1.0";
+                    document.getElementById("updUrl").value = data.download_url || "";
+                    document.getElementById("updNotes").value = data.release_notes || "";
+                });
+            }
+
+            function saveAppUpdateSettings() {
+                const payload = {
+                    force_update: document.getElementById("updForce").value === "true",
+                    latest_version_code: parseInt(document.getElementById("updCode").value) || 1,
+                    latest_version_name: document.getElementById("updName").value.trim(),
+                    download_url: document.getElementById("updUrl").value.trim(),
+                    release_notes: document.getElementById("updNotes").value.trim()
+                };
+
+                fetch("/api/admin/set_update", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json", "Authorization": `Bearer ${adminToken}` },
+                    body: JSON.stringify(payload)
+                })
+                .then(r => r.json())
+                .then(data => {
+                    if (data.status === "success") {
+                        alert("✅ App Update settings saved and pushed successfully!");
+                    } else {
+                        alert("❌ Error: " + (data.detail || "Unknown error"));
+                    }
+                });
+            }
+
+            function loadOrgLibUrl() {
+                fetch("/api/app/org_lib")
+                .then(r => r.json())
+                .then(data => {
+                    if (data.url) document.getElementById("orgLibUrl").value = data.url;
+                });
+            }
+
+            function saveOrgLibUrl() {
+                const url = document.getElementById("orgLibUrl").value.trim();
+                fetch("/api/admin/set_org_lib", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json", "Authorization": `Bearer ${adminToken}` },
+                    body: JSON.stringify({ url: url })
+                })
+                .then(r => r.json())
+                .then(data => {
+                    if (data.status === "success") {
+                        alert("✅ Original Lib URL saved successfully!");
+                    } else {
+                        alert("❌ Error saving URL");
+                    }
+                });
+            }
+
+            function loadVersionHistory() {
+                fetch("/api/admin/version_history", { headers: { "Authorization": `Bearer ${adminToken}` } })
+                .then(r => r.json())
+                .then(data => {
+                    const tbody = document.getElementById("versionHistoryBody");
+                    tbody.innerHTML = "";
+                    data.forEach(item => {
+                        let isForce = item.force_update ? '<span style="color:var(--red);font-weight:bold;">YES</span>' : 'NO';
+                        let dt = item.saved_at ? item.saved_at.split('.')[0].replace('T', ' ') : 'N/A';
+                        tbody.innerHTML += `
+                            <tr>
+                                <td style="font-weight:bold; color:var(--cyan);">${item.latest_version_name}</td>
+                                <td>v${item.latest_version_code}</td>
+                                <td>${isForce}</td>
+                                <td>${dt}</td>
+                                <td style="max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${item.release_notes}</td>
+                            </tr>
+                        `;
+                    });
+                });
+            }
+
+            function checkFridayCleanup() {
+                const now = new Date();
+                if (now.getDay() === 5 && now.getHours() >= 9 && now.getHours() <= 10) {
+                    const msg = document.getElementById("cleanupMsgText");
+                    if (msg) {
+                        msg.innerText = "⚠️ IT IS FRIDAY (9-10 AM)! Time to clear out old files! Delete all files?";
+                        msg.style.color = "var(--red)";
+                        msg.style.fontWeight = "bold";
+                        
+                        // Auto-Prompt to delete
+                        setTimeout(() => {
+                            if (confirm("⚠️ FRIDAY CLEANUP: Do you want to delete all expired/old files, including org lib?")) {
+                                cleanupOldFiles();
+                            }
+                        }, 1000);
+                    }
+                }
+            }
+
+            function cleanupOldFiles() {
+                if (!confirm("🚨 WARNING: Are you sure you want to DELETE ALL patches and the original lib URL? This cannot be undone!")) return;
+                fetch("/api/admin/cleanup_files", {
+                    method: "DELETE",
+                    headers: { "Authorization": `Bearer ${adminToken}` }
+                })
+                .then(r => r.json())
+                .then(data => {
+                    if (data.status === "success") {
+                        alert("✅ Cleanup successful! All files and org lib deleted.");
+                        loadFiles();
+                        loadOrgLibUrl();
+                    } else {
+                        alert("❌ Cleanup failed.");
+                    }
+                });
             }
         </script>
     </body>
