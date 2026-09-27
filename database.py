@@ -469,7 +469,7 @@ def delete_file(file_id: int):
 
 # --- LICENSE KEY OPERATIONS ---
 
-def create_key(key: str, file_id: int, duration_days: int = 3, max_devices: int = 1):
+def create_key(key: str, file_id: int, duration_days: int = 3, max_devices: int = 1, expires_at=None):
     conn = get_connection()
     cursor = conn.cursor()
     is_postgres = DATABASE_URL is not None
@@ -478,13 +478,13 @@ def create_key(key: str, file_id: int, duration_days: int = 3, max_devices: int 
     
     if is_postgres:
         cursor.execute(
-            "INSERT INTO license_keys (key, file_id, duration_days, max_devices, created_at) VALUES (%s, %s, %s, %s, %s)",
-            (key, file_id, duration_days, max_devices, created_at)
+            "INSERT INTO license_keys (key, file_id, duration_days, max_devices, created_at, expires_at) VALUES (%s, %s, %s, %s, %s, %s)",
+            (key, file_id, duration_days, max_devices, created_at, expires_at)
         )
     else:
         cursor.execute(
-            "INSERT INTO license_keys (key, file_id, duration_days, max_devices, created_at) VALUES (?, ?, ?, ?, ?)",
-            (key, file_id, duration_days, max_devices, created_at)
+            "INSERT INTO license_keys (key, file_id, duration_days, max_devices, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (key, file_id, duration_days, max_devices, created_at, expires_at)
         )
     conn.commit()
     conn.close()
@@ -679,7 +679,8 @@ def verify_key(key: str, device_id: str):
         activated_at_str = now if is_postgres else now.isoformat()
         
         if not activated_at_dt:
-            expires_at_dt = now + timedelta(days=duration_days)
+            if not expires_at_dt:
+                expires_at_dt = now + timedelta(days=duration_days)
             expires_at_str = expires_at_dt if is_postgres else expires_at_dt.isoformat()
             
             if is_postgres:

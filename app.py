@@ -583,6 +583,8 @@ class GenerateKeyRequest(BaseModel):
     duration_days: int = 3
     max_devices: int = 1
     custom_key: str = None
+    exp_mode: str = "days"
+    exp_val: str = None
 
 @app.post("/api/admin/keys/generate")
 async def admin_generate_key(req: GenerateKeyRequest, authenticated: bool = Depends(verify_admin)):
@@ -592,12 +594,27 @@ async def admin_generate_key(req: GenerateKeyRequest, authenticated: bool = Depe
         prefix = f"ROXY-X-SKYLS-{req.key_type}" if req.key_type in ["ADMIN", "VIP"] else "ROXY-X-SKYLS"
         key_str = generate_key_string(prefix)
         
-    database.create_key(key_str, req.file_id, req.duration_days, req.max_devices)
+    expires_at = None
+    dur_days = req.duration_days
+    
+    if req.exp_mode == "minutes" and req.exp_val:
+        dur_days = 0
+        try:
+            expires_at = (datetime.utcnow() + timedelta(minutes=int(req.exp_val))).isoformat()
+        except: pass
+    elif req.exp_mode == "exact" and req.exp_val:
+        dur_days = 0
+        try:
+            dt = datetime.strptime(req.exp_val, "%Y-%m-%dT%H:%M")
+            expires_at = dt.isoformat()
+        except: pass
+        
+    database.create_key(key_str, req.file_id, dur_days, req.max_devices, expires_at)
     return {
         "status": "success",
         "key": key_str,
         "key_type": req.key_type,
-        "duration_days": req.duration_days,
+        "duration_days": dur_days,
         "max_devices": req.max_devices
     }
 
@@ -689,7 +706,7 @@ async def admin_dashboard():
         <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet">
         <style>
             :root {
-                --bg: #0f172a;
+                --bg: #000000;
                 --surface: rgba(18, 24, 41, 0.65);
                 --surface-card: rgba(18, 24, 41, 0.65);
                 --cyan: #00F0FF;
@@ -703,10 +720,18 @@ async def admin_dashboard():
             }
 
             * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Rajdhani', sans-serif; }
+            /* Background glowing spinning elements */
+            body::before, body::after {
+                content: ''; position: fixed; top: 50%; left: 50%; width: 70vw; height: 70vw;
+                border-radius: 50%; transform: translate(-50%, -50%); filter: blur(120px); opacity: 0.6; z-index: -1;
+                animation: spinGlow 15s linear infinite; pointer-events: none;
+            }
+            body::before { background: radial-gradient(circle, rgba(0,240,255,0.4), transparent 60%); margin-left: -15vw; }
+            body::after { background: radial-gradient(circle, rgba(178,0,255,0.4), transparent 60%); margin-left: 15vw; animation-direction: reverse; animation-duration: 20s; }
+            @keyframes spinGlow { 100% { transform: translate(-50%, -50%) rotate(360deg); } }
+            
             body { 
-                background: var(--bg-gradient);
-                background-size: 400% 400%;
-                animation: gradientBG 15s ease infinite;
+                background: #000000;
                 color: var(--text); 
                 padding-bottom: 40px; 
                 min-height: 100vh;
@@ -781,6 +806,9 @@ async def admin_dashboard():
                 transform: translate(-50%, -50%) rotate(45deg) translateY(100%);
             }
             .btn:hover::before { transform: translate(-50%, -50%) rotate(45deg) translateY(0); }
+            .btn:active { transform: scale(0.92); box-shadow: 0 0 40px var(--cyan); }
+            .btn-danger:active { box-shadow: 0 0 40px var(--red); }
+            .btn-success:active { box-shadow: 0 0 40px var(--green); }
             .btn:hover { 
                 background: var(--cyan); 
                 color: #000; 
@@ -1070,12 +1098,23 @@ async def admin_dashboard():
                     <p style="color: var(--text-sec); margin-bottom: 12px; font-size: 13px;">
                         When a user's license key expires, the app will silently download this file and restore it to disable cheats.
                     </p>
-                    <div style="display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: end;">
+                    <div style="margin-bottom: 12px; display: flex; gap: 8px;">
+                        <button class="btn btn-success" id="btnOrgUrl" onclick="toggleOrgMode('url')" style="padding: 4px 10px; font-size: 12px;">🔗 URL</button>
+                        <button class="btn" id="btnOrgFile" onclick="toggleOrgMode('file')" style="padding: 4px 10px; font-size: 12px; border-color: var(--text-sec); color: var(--text-sec);">📁 LOCAL FILE</button>
+                    </div>
+                    <div id="orgUrlMode" style="display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: end;">
                         <div class="form-group" style="margin-bottom: 0;">
-                            <label>Original libil2cpp.so URL</label>
-                            <input type="url" id="orgLibUrl" class="form-control" placeholder="https://example.com/libil2cpp_original.so">
+                            <label>Original Lib URL</label>
+                            <input type="url" id="orgLibUrl" class="form-control" placeholder="https://example.com/lib_original.so">
                         </div>
                         <button class="btn btn-success" style="height: 42px;" onclick="saveOrgLibUrl()">💾 SAVE URL</button>
+                    </div>
+                    <div id="orgFileMode" style="display: none; grid-template-columns: 1fr auto; gap: 10px; align-items: end;">
+                        <div class="form-group" style="margin-bottom: 0;">
+                            <label>Upload Original Lib File</label>
+                            <input type="file" id="orgFileInput" class="form-control">
+                        </div>
+                        <button class="btn btn-success" style="height: 42px;" onclick="alert('Feature placeholder: uploading org file locally')">UPLOAD LOCAL</button>
                     </div>
                 </div>
 
@@ -1097,15 +1136,30 @@ async def admin_dashboard():
                 </div>
 
                 <div class="card">
-                    <div class="card-header">
+                    <div class="card-header" style="margin-bottom: 8px;">
                         <span class="card-title" id="txtFilesTitle">UPLOAD PATCH FILES (lib.zip)</span>
                     </div>
-                    <div class="form-group">
-                        <input type="file" id="fileInput" class="form-control" accept=".zip,.7z,.rar,.tar,.gz,.bz2,.xz,.so">
+                    <div style="margin-bottom: 12px; display: flex; gap: 8px;">
+                        <button class="btn" id="btnPatchUrl" onclick="togglePatchMode('url')" style="padding: 4px 10px; font-size: 12px; border-color: var(--text-sec); color: var(--text-sec);">🔗 URL</button>
+                        <button class="btn btn-success" id="btnPatchFile" onclick="togglePatchMode('file')" style="padding: 4px 10px; font-size: 12px;">📁 LOCAL FILE</button>
                     </div>
-                    <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
-                        <button class="btn btn-success" id="btnUploadFile" onclick="uploadFile()">UPLOAD PATCH FILE</button>
-                        <button class="btn btn-danger" id="btnCancelUpload" style="display: none;" onclick="cancelUpload()">STOP UPLOAD</button>
+                    
+                    <div id="patchUrlMode" style="display: none; grid-template-columns: 1fr auto; gap: 10px; align-items: end; margin-bottom: 16px;">
+                        <div class="form-group" style="margin-bottom: 0;">
+                            <label>Patch File URL</label>
+                            <input type="url" id="patchUrlInput" class="form-control" placeholder="https://example.com/lib.zip">
+                        </div>
+                        <button class="btn btn-success" style="height: 42px;" onclick="alert('Feature placeholder: adding URL patch')">ADD URL</button>
+                    </div>
+
+                    <div id="patchFileMode">
+                        <div class="form-group">
+                            <input type="file" id="fileInput" class="form-control" accept=".zip,.7z,.rar,.tar,.gz,.bz2,.xz,.so">
+                        </div>
+                        <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+                            <button class="btn btn-success" id="btnUploadFile" onclick="uploadFile()">UPLOAD PATCH FILE</button>
+                            <button class="btn btn-danger" id="btnCancelUpload" style="display: none;" onclick="cancelUpload()">STOP UPLOAD</button>
+                        </div>
                     </div>
 
                     <!-- App-like Live Upload Progress Display -->
@@ -1265,8 +1319,24 @@ async def admin_dashboard():
                     <select id="genFileSelect" class="form-control"></select>
                 </div>
                 <div class="form-group">
+                    <label>Expiration Mode</label>
+                    <select id="genExpMode" class="form-control" onchange="toggleExpMode()">
+                        <option value="days">Mode 1: Duration (Days)</option>
+                        <option value="minutes">Mode 2: Duration (Minutes)</option>
+                        <option value="exact">Mode 3: Exact Date & Time</option>
+                    </select>
+                </div>
+                <div class="form-group" id="grpExpDays">
                     <label>Duration (Days)</label>
                     <input type="number" id="genDays" class="form-control" value="3" min="1">
+                </div>
+                <div class="form-group" id="grpExpMins" style="display:none;">
+                    <label>Duration (Minutes)</label>
+                    <input type="number" id="genMins" class="form-control" value="60" min="1">
+                </div>
+                <div class="form-group" id="grpExpExact" style="display:none;">
+                    <label>Exact Expiration Time</label>
+                    <input type="datetime-local" id="genExact" class="form-control">
                 </div>
                 <div class="form-group">
                     <label>Max Devices</label>
