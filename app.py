@@ -1233,16 +1233,16 @@ async def admin_dashboard():
                 
                 <div class="card" style="margin-bottom: 20px;">
                     <div class="card-header">
-                        <span class="card-title" style="color: var(--cyan);">👤 ТІРКЕЛГЕН ҚОЛДАНУШЫЛАР (APP USERS)</span>
+                        <span class="card-title" style="color: var(--cyan);">👤 REGISTERED APP USERS</span>
                     </div>
                     <div class="table-responsive">
                         <table>
                             <thead>
                                 <tr>
-                                    <th>Логин (Username)</th>
-                                    <th>Баланс (Balance)</th>
-                                    <th>Рөлі (Role)</th>
-                                    <th>Тіркелді (Created At)</th>
+                                    <th>Username</th>
+                                    <th>Balance</th>
+                                    <th>Role</th>
+                                    <th>Created At</th>
                                 </tr>
                             </thead>
                             <tbody id="appUsersTableBody">
@@ -1254,7 +1254,7 @@ async def admin_dashboard():
 
                 <div class="card">
                     <div class="card-header">
-                        <span class="card-title" id="txtUsersTitle">📱 АКТИВТІ ҚҰРЫЛҒЫЛАР (ACTIVE DEVICES)</span>
+                        <span class="card-title" id="txtUsersTitle">📱 ACTIVE DEVICES</span>
                     </div>
                     <div class="table-responsive">
                         <table>
@@ -1373,23 +1373,23 @@ async def admin_dashboard():
                     <select id="genFileSelect" class="form-control"></select>
                 </div>
                 <div class="form-group">
-                    <label>Кілттің біту уақытын таңдау (Expiration Mode)</label>
+                    <label>Expiration Mode</label>
                     <select id="genExpMode" class="form-control" onchange="toggleExpMode()">
-                        <option value="days">1. Қолмен Күн жазу (Duration Days)</option>
-                        <option value="minutes">2. Минут қосу (Duration Minutes)</option>
-                        <option value="exact">3. Күнді Календарьдан таңдау (Exact Date)</option>
+                        <option value="days">Mode 1: Duration (Days)</option>
+                        <option value="minutes">Mode 2: Duration (Minutes)</option>
+                        <option value="exact">Mode 3: Exact Date & Time</option>
                     </select>
                 </div>
                 <div class="form-group" id="grpExpDays">
-                    <label>Қанша күннен соң бітеді? (Days)</label>
+                    <label>Duration (Days)</label>
                     <input type="number" id="genDays" class="form-control" value="3" min="1">
                 </div>
                 <div class="form-group" id="grpExpMins" style="display:none;">
-                    <label>Қанша минуттан соң бітеді? (Minutes)</label>
+                    <label>Duration (Minutes)</label>
                     <input type="number" id="genMins" class="form-control" value="60" min="1">
                 </div>
                 <div class="form-group" id="grpExpExact" style="display:none;">
-                    <label>Нақты қай күні және қай сағатта/минутта бітеді?</label>
+                    <label>Exact Expiration Time</label>
                     <input type="datetime-local" id="genExact" class="form-control" style="background: var(--surface); color: var(--text); border: 1px solid var(--border); padding: 10px; border-radius: 6px; width: 100%;">
                 </div>
                 <div class="form-group">
