@@ -838,8 +838,45 @@ import hashlib
 def _hash_password(password: str) -> str:
     return hashlib.sha256(password.encode("utf-8")).hexdigest()
 
-def register_user(username: str, password: str, device_id: str = "") -> dict:
+def is_email_registered(email: str) -> bool:
+    if not email:
+        return False
+    conn = get_connection()
+    cursor = conn.cursor()
+    is_postgres = _using_postgres
+    try:
+        if is_postgres:
+            cursor.execute("SELECT username FROM users WHERE LOWER(email) = LOWER(%s)", (email.strip(),))
+        else:
+            cursor.execute("SELECT username FROM users WHERE LOWER(email) = LOWER(?)", (email.strip(),))
+        row = cursor.fetchone()
+        conn.close()
+        return bool(row)
+    except Exception:
+        conn.close()
+        return False
+
+def is_username_registered(username: str) -> bool:
+    if not username:
+        return False
+    conn = get_connection()
+    cursor = conn.cursor()
+    is_postgres = _using_postgres
+    try:
+        if is_postgres:
+            cursor.execute("SELECT username FROM users WHERE LOWER(username) = LOWER(%s)", (username.strip(),))
+        else:
+            cursor.execute("SELECT username FROM users WHERE LOWER(username) = LOWER(?)", (username.strip(),))
+        row = cursor.fetchone()
+        conn.close()
+        return bool(row)
+    except Exception:
+        conn.close()
+        return False
+
+def register_user(username: str, password: str, device_id: str = "", email: str = "") -> dict:
     username = username.strip()
+    email = (email or "").strip().lower()
     if not username or not password:
         return {"status": "error", "message": "Username and password required"}
     
@@ -848,35 +885,49 @@ def register_user(username: str, password: str, device_id: str = "") -> dict:
     is_postgres = _using_postgres
     
     try:
-        # Check if user exists
+        # Check if username exists
         if is_postgres:
             cursor.execute("SELECT username FROM users WHERE LOWER(username) = LOWER(%s)", (username,))
             if cursor.fetchone():
-                return {"status": "error", "message": "Username already exists"}
+                conn.close()
+                return {"status": "error", "message": "Бұл логин бос емес, басқа логин жазыңыз!"}
+            if email:
+                cursor.execute("SELECT username FROM users WHERE LOWER(email) = LOWER(%s)", (email,))
+                if cursor.fetchone():
+                    conn.close()
+                    return {"status": "error", "message": "Бұл Gmail бұрын тіркелген! 1 Gmail тек 1 адамға арналған."}
             if device_id:
                 cursor.execute("SELECT username FROM users WHERE device_id = %s", (device_id,))
                 if cursor.fetchone():
-                    return {"status": "error", "message": "This device is already registered to another account"}
+                    conn.close()
+                    return {"status": "error", "message": "Бұл құрылғы басқа аккаунтқа тіркелген"}
         else:
             cursor.execute("SELECT username FROM users WHERE LOWER(username) = LOWER(?)", (username,))
             if cursor.fetchone():
-                return {"status": "error", "message": "Username already exists"}
+                conn.close()
+                return {"status": "error", "message": "Бұл логин бос емес, басқа логин жазыңыз!"}
+            if email:
+                cursor.execute("SELECT username FROM users WHERE LOWER(email) = LOWER(?)", (email,))
+                if cursor.fetchone():
+                    conn.close()
+                    return {"status": "error", "message": "Бұл Gmail бұрын тіркелген! 1 Gmail тек 1 адамға арналған."}
             if device_id:
                 cursor.execute("SELECT username FROM users WHERE device_id = ?", (device_id,))
                 if cursor.fetchone():
-                    return {"status": "error", "message": "This device is already registered to another account"}
+                    conn.close()
+                    return {"status": "error", "message": "Бұл құрылғы басқа аккаунтқа тіркелген"}
         
         pwd_hash = _hash_password(password)
         now = datetime.utcnow()
         created_at = now if is_postgres else now.isoformat()
         
         if is_postgres:
-            cursor.execute("INSERT INTO users (username, password_hash, balance, role, created_at, device_id) VALUES (%s, %s, 0.00, 'user', %s, %s)", (username, pwd_hash, created_at, device_id))
+            cursor.execute("INSERT INTO users (username, password_hash, balance, role, created_at, device_id, email) VALUES (%s, %s, 0.00, 'user', %s, %s, %s)", (username, pwd_hash, created_at, device_id, email))
         else:
-            cursor.execute("INSERT INTO users (username, password_hash, balance, role, created_at, device_id) VALUES (?, ?, 0.00, 'user', ?, ?)", (username, pwd_hash, created_at, device_id))
+            cursor.execute("INSERT INTO users (username, password_hash, balance, role, created_at, device_id, email) VALUES (?, ?, 0.00, 'user', ?, ?, ?)", (username, pwd_hash, created_at, device_id, email))
         conn.commit()
         conn.close()
-        return {"status": "success", "username": username, "balance": 0.00, "role": "user"}
+        return {"status": "success", "username": username, "email": email, "balance": 0.00, "role": "user"}
     except Exception as e:
         conn.close()
         return {"status": "error", "message": str(e)}
@@ -892,20 +943,29 @@ def login_user(username: str, password: str, device_id: str = "") -> dict:
     pwd_hash = _hash_password(password)
     
     try:
+        # Match by either username or email
         if is_postgres:
-            cursor.execute("SELECT username, password_hash, balance, role, device_id FROM users WHERE LOWER(username) = LOWER(%s)", (username,))
+            cursor.execute("SELECT username, password_hash, balance, role, device_id, email FROM users WHERE LOWER(username) = LOWER(%s) OR LOWER(email) = LOWER(%s)", (username, username))
         else:
-            cursor.execute("SELECT username, password_hash, balance, role, device_id FROM users WHERE LOWER(username) = LOWER(?)", (username,))
+            cursor.execute("SELECT username, password_hash, balance, role, device_id, email FROM users WHERE LOWER(username) = LOWER(?) OR LOWER(email) = LOWER(?)", (username, username))
         row = cursor.fetchone()
         
         if not row:
             conn.close()
-            return {"status": "error", "message": "User not found"}
+            return {
+                "status": "error",
+                "message": "Қате логин немесе пароль!",
+                "support_url": "https://t.me/SKYLS_X_HACK"
+            }
         
-        u_name, u_hash, u_bal, u_role, u_device = row
+        u_name, u_hash, u_bal, u_role, u_device, u_email = row
         if device_id and u_device and u_device != device_id:
             conn.close()
-            return {"status": "error", "message": "This account is bound to another device. You cannot login from this device."}
+            return {
+                "status": "error",
+                "message": "Бұл аккаунт басқа құрылғыға бекітілген!",
+                "support_url": "https://t.me/SKYLS_X_HACK"
+            }
         
         if device_id and not u_device:
             if is_postgres:
@@ -916,15 +976,82 @@ def login_user(username: str, password: str, device_id: str = "") -> dict:
             
         conn.close()
         if u_hash != pwd_hash:
-            return {"status": "error", "message": "Incorrect password"}
+            return {
+                "status": "error",
+                "message": "Қате құпия сөз!",
+                "support_url": "https://t.me/SKYLS_X_HACK"
+            }
             
         return {
             "status": "success",
             "username": u_name,
+            "email": u_email or "",
             "balance": float(u_bal or 0.0),
             "role": u_role or "user"
         }
     except Exception as e:
+        return {"status": "error", "message": str(e), "support_url": "https://t.me/SKYLS_X_HACK"}
+
+def update_user_credentials(current_username: str, new_username: str = "", new_password: str = "") -> dict:
+    current_username = current_username.strip()
+    new_username = (new_username or "").strip()
+    new_password = (new_password or "").strip()
+    
+    if not current_username:
+        return {"status": "error", "message": "Current username required"}
+        
+    conn = get_connection()
+    cursor = conn.cursor()
+    is_postgres = _using_postgres
+    try:
+        # Check current user exists
+        if is_postgres:
+            cursor.execute("SELECT username, email, balance, role FROM users WHERE LOWER(username) = LOWER(%s)", (current_username,))
+        else:
+            cursor.execute("SELECT username, email, balance, role FROM users WHERE LOWER(username) = LOWER(?)", (current_username,))
+        row = cursor.fetchone()
+        if not row:
+            conn.close()
+            return {"status": "error", "message": "User not found"}
+            
+        db_user, db_email, db_bal, db_role = row
+        
+        target_username = db_user
+        if new_username and new_username.lower() != db_user.lower():
+            # Check availability
+            if is_postgres:
+                cursor.execute("SELECT username FROM users WHERE LOWER(username) = LOWER(%s)", (new_username,))
+            else:
+                cursor.execute("SELECT username FROM users WHERE LOWER(username) = LOWER(?)", (new_username,))
+            if cursor.fetchone():
+                conn.close()
+                return {"status": "error", "message": "Бұл логин бос емес!"}
+            
+            # Update username
+            if is_postgres:
+                cursor.execute("UPDATE users SET username = %s WHERE username = %s", (new_username, db_user))
+            else:
+                cursor.execute("UPDATE users SET username = ? WHERE username = ?", (new_username, db_user))
+            target_username = new_username
+            
+        if new_password:
+            new_hash = _hash_password(new_password)
+            if is_postgres:
+                cursor.execute("UPDATE users SET password_hash = %s WHERE username = %s", (new_hash, target_username))
+            else:
+                cursor.execute("UPDATE users SET password_hash = ? WHERE username = ?", (new_hash, target_username))
+                
+        conn.commit()
+        conn.close()
+        return {
+            "status": "success",
+            "username": target_username,
+            "email": db_email or "",
+            "balance": float(db_bal or 0.0),
+            "role": db_role or "user"
+        }
+    except Exception as e:
+        conn.close()
         return {"status": "error", "message": str(e)}
 
 def get_user_info(username: str) -> dict:

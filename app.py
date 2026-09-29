@@ -8,9 +8,13 @@ import requests
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pydantic import BaseModel
+from typing import Optional
 from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Header, status
 from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse, Response, RedirectResponse, FileResponse
 from io import BytesIO
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 
 import database
 
@@ -260,10 +264,62 @@ def notify_telegram(message: str):
             logger.error(f"Telegram notify error: {e}")
     threading.Thread(target=_send, daemon=True).start()
 
+_email_verification_codes = {}
+
+def send_gmail_code(target_email: str, code: str) -> tuple:
+    target_email = target_email.strip()
+    gmail_user = os.environ.get("GMAIL_USER") or database.get_setting("gmail_user", "")
+    gmail_pass = os.environ.get("GMAIL_APP_PASSWORD") or database.get_setting("gmail_app_password", "")
+    
+    if not gmail_user or not gmail_pass:
+        logger.warning(f"GMAIL_USER/GMAIL_APP_PASSWORD not set. Code for {target_email} is {code}")
+        notify_telegram(f"🔐 <b>GMAIL VERIFICATION CODE</b>\n📧 Email: <code>{target_email}</code>\n🔢 Code: <code>{code}</code>\n<i>(Render Environment-ке GMAIL_USER және GMAIL_APP_PASSWORD қоссаңыз поштаға барады)</i>")
+        return True, "Code generated and logged"
+        
+    try:
+        msg = MIMEMultipart()
+        msg["From"] = f"SKYLS AUTH <{gmail_user}>"
+        msg["To"] = target_email
+        msg["Subject"] = f"SKYLS APP - Растау коды: {code}"
+        
+        body = f"""Сәлеметсіз бе!
+
+SKYLS қолданбасында тіркелуді растау кодыңыз:
+
+👉 {code} 👈
+
+Бұл кодты ешкімге бермеңіз. Код 10 минут бойы жарамды.
+Егер сіз тіркелмеген болсаңыз, бұл хатты елемеңіз.
+
+Қолдау қызметі: https://t.me/SKYLS_X_HACK
+"""
+        msg.attach(MIMEText(body, "plain", "utf-8"))
+        
+        server = smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=12)
+        server.login(gmail_user, gmail_pass)
+        server.sendmail(gmail_user, target_email, msg.as_string())
+        server.quit()
+        return True, "Email sent successfully"
+    except Exception as e:
+        logger.error(f"Failed to send email to {target_email}: {e}")
+        notify_telegram(f"⚠️ <b>SMTP ERROR</b>: {e}\nFallback Code for {target_email}: <code>{code}</code>")
+        return False, str(e)
+
+class SendCodeRequest(BaseModel):
+    email: str
+    username: Optional[str] = None
+
 class AuthRequest(BaseModel):
     username: str
     password: str
     device_id: str = ""
+    email: Optional[str] = None
+    code: Optional[str] = None
+
+class UpdateProfileRequest(BaseModel):
+    current_username: str
+    new_username: Optional[str] = None
+    new_password: Optional[str] = None
 
 class BalanceRequest(BaseModel):
     username: str
@@ -275,12 +331,52 @@ class BuyKeyRequest(BaseModel):
     duration_days: int = 1
     file_id: int = 1
 
+@app.post("/api/user/send_code")
+async def api_send_code(req: SendCodeRequest):
+    email = req.email.strip().lower()
+    if not email or "@" not in email or "." not in email:
+        raise HTTPException(status_code=400, detail="Жарамды Gmail поштасын енгізіңіз!")
+    
+    if database.is_email_registered(email):
+        raise HTTPException(status_code=400, detail="Бұл Gmail бұрын тіркелген! 1 Gmail тек 1 адамға арналған.")
+    
+    if req.username:
+        u = req.username.strip()
+        if database.is_username_registered(u):
+            raise HTTPException(status_code=400, detail="Бұл логин бос емес, басқа логин таңдаңыз!")
+            
+    code = f"{random.randint(100000, 999999)}"
+    _email_verification_codes[email] = {
+        "code": code,
+        "expires_at": time.time() + 600
+    }
+    
+    success, msg = send_gmail_code(email, code)
+    return {"status": "success", "message": "Растау коды поштаңызға жіберілді!"}
+
 @app.post("/api/user/register")
 async def api_register(req: AuthRequest):
-    res = database.register_user(req.username, req.password, req.device_id)
+    email = (req.email or "").strip().lower()
+    if not email:
+        raise HTTPException(status_code=400, detail="Gmail поштасын жазу міндетті!")
+        
+    if database.is_email_registered(email):
+        raise HTTPException(status_code=400, detail="Бұл Gmail бұрын тіркелген! 1 Gmail тек 1 адамға арналған.")
+        
+    cached = _email_verification_codes.get(email)
+    if not cached:
+        raise HTTPException(status_code=400, detail="Алдымен Gmail-ге растау кодын жіберіңіз!")
+    if time.time() > cached.get("expires_at", 0):
+        _email_verification_codes.pop(email, None)
+        raise HTTPException(status_code=400, detail="Растау кодының мерзімі өтіп кетті! Қайтадан код алыңыз.")
+    if str(req.code or "").strip() != str(cached.get("code", "")).strip():
+        raise HTTPException(status_code=400, detail="Қате растау коды!")
+        
+    res = database.register_user(req.username, req.password, req.device_id, email=email)
     if res.get("status") == "error":
         raise HTTPException(status_code=400, detail=res.get("message"))
-    notify_telegram(f"🆕 <b>NEW USER REGISTERED</b>\n👤 Username: <code>{req.username}</code>")
+    _email_verification_codes.pop(email, None)
+    notify_telegram(f"🆕 <b>NEW USER REGISTERED</b>\n👤 Username: <code>{req.username}</code>\n📧 Email: <code>{email}</code>")
     return res
 
 @app.post("/api/user/login")
@@ -288,6 +384,14 @@ async def api_login(req: AuthRequest):
     res = database.login_user(req.username, req.password, req.device_id)
     if res.get("status") == "error":
         raise HTTPException(status_code=400, detail=res.get("message"))
+    return res
+
+@app.post("/api/user/update_profile")
+async def api_update_profile(req: UpdateProfileRequest):
+    res = database.update_user_credentials(req.current_username, req.new_username or "", req.new_password or "")
+    if res.get("status") == "error":
+        raise HTTPException(status_code=400, detail=res.get("message"))
+    notify_telegram(f"🔄 <b>PROFILE UPDATED</b>\n👤 Old: <code>{req.current_username}</code>\n👤 New: <code>{res.get('username')}</code>")
     return res
 
 
