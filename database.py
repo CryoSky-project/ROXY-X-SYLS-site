@@ -411,7 +411,35 @@ def set_github_settings(token: str, repo: str):
         cursor.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", ("github_token", token))
         cursor.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", ("github_repo", repo))
     conn.commit()
-    conn.close()
+def get_setting(key: str, default: str = "") -> str:
+    conn = get_connection()
+    cursor = conn.cursor()
+    is_postgres = _using_postgres
+    try:
+        if is_postgres:
+            cursor.execute("SELECT value FROM settings WHERE key = %s", (key,))
+        else:
+            cursor.execute("SELECT value FROM settings WHERE key = ?", (key,))
+        row = cursor.fetchone()
+        conn.close()
+        return row[0] if (row and row[0]) else default
+    except Exception:
+        conn.close()
+        return default
+
+def set_setting(key: str, value: str):
+    conn = get_connection()
+    cursor = conn.cursor()
+    is_postgres = _using_postgres
+    try:
+        if is_postgres:
+            cursor.execute("INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", (key, value))
+        else:
+            cursor.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        conn.close()
 
 # --- FILE OPERATIONS ---
 

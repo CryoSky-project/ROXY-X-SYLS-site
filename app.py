@@ -268,8 +268,8 @@ _email_verification_codes = {}
 
 def send_gmail_code(target_email: str, code: str) -> tuple:
     target_email = target_email.strip()
-    gmail_user = os.environ.get("GMAIL_USER") or database.get_setting("gmail_user", "")
-    gmail_pass = os.environ.get("GMAIL_APP_PASSWORD") or database.get_setting("gmail_app_password", "")
+    gmail_user = os.environ.get("GMAIL_USER") or database.get_setting("gmail_user", "skyls.hack@gmail.com")
+    gmail_pass = os.environ.get("GMAIL_APP_PASSWORD") or database.get_setting("gmail_app_password", "jqlxfjjutqegtzcg")
     
     if not gmail_user or not gmail_pass:
         logger.warning(f"GMAIL_USER/GMAIL_APP_PASSWORD not set. Code for {target_email} is {code}")
