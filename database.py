@@ -1277,3 +1277,34 @@ def google_auth_user(email: str, google_id: str, device_id: str) -> dict:
     finally:
         conn.close()
 
+
+def reset_user_password_by_email(email: str, new_password: str) -> dict:
+    email = email.strip().lower()
+    new_password = new_password.strip()
+    if not email or not new_password:
+        return {"status": "error", "message": "Email and new password required"}
+    conn = get_connection()
+    cursor = conn.cursor()
+    is_postgres = _using_postgres
+    try:
+        if is_postgres:
+            cursor.execute("SELECT username FROM users WHERE LOWER(email) = LOWER(%s)", (email,))
+        else:
+            cursor.execute("SELECT username FROM users WHERE LOWER(email) = LOWER(?)", (email,))
+        row = cursor.fetchone()
+        if not row:
+            conn.close()
+            return {"status": "error", "message": "Бұл Gmail бойынша аккаунт табылмады!"}
+        username = row[0]
+        new_hash = _hash_password(new_password)
+        if is_postgres:
+            cursor.execute("UPDATE users SET password_hash = %s WHERE LOWER(email) = LOWER(%s)", (new_hash, email))
+        else:
+            cursor.execute("UPDATE users SET password_hash = ? WHERE LOWER(email) = LOWER(?)", (new_hash, email))
+        conn.commit()
+        conn.close()
+        return {"status": "success", "username": username}
+    except Exception as e:
+        conn.close()
+        return {"status": "error", "message": str(e)}
+

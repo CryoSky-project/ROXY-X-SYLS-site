@@ -268,14 +268,9 @@ _email_verification_codes = {}
 
 def send_gmail_code(target_email: str, code: str) -> tuple:
     target_email = target_email.strip()
-    gmail_user = os.environ.get("GMAIL_USER") or database.get_setting("gmail_user", "skyls.hack@gmail.com")
-    gmail_pass = os.environ.get("GMAIL_APP_PASSWORD") or database.get_setting("gmail_app_password", "jqlxfjjutqegtzcg")
+    gmail_user = os.environ.get("GMAIL_USER") or "skyls.hack@gmail.com"
+    gmail_pass = os.environ.get("GMAIL_APP_PASSWORD") or "jqlxfjjutqegtzcg"
     
-    if not gmail_user or not gmail_pass:
-        logger.warning(f"GMAIL_USER/GMAIL_APP_PASSWORD not set. Code for {target_email} is {code}")
-        notify_telegram(f"🔐 <b>GMAIL VERIFICATION CODE</b>\n📧 Email: <code>{target_email}</code>\n🔢 Code: <code>{code}</code>\n<i>(Render Environment-ке GMAIL_USER және GMAIL_APP_PASSWORD қоссаңыз поштаға барады)</i>")
-        return True, "Code generated and logged"
-        
     try:
         msg = MIMEMultipart()
         msg["From"] = f"SKYLS AUTH <{gmail_user}>"
@@ -284,12 +279,12 @@ def send_gmail_code(target_email: str, code: str) -> tuple:
         
         body = f"""Сәлеметсіз бе!
 
-SKYLS қолданбасында тіркелуді растау кодыңыз:
+SKYLS қолданбасында растау кодыңыз:
 
 👉 {code} 👈
 
 Бұл кодты ешкімге бермеңіз. Код 10 минут бойы жарамды.
-Егер сіз тіркелмеген болсаңыз, бұл хатты елемеңіз.
+Егер бұл әрекетті сіз жасамаған болсаңыз, хатты елемеңіз.
 
 Қолдау қызметі: https://t.me/SKYLS_X_HACK
 """
@@ -308,6 +303,12 @@ SKYLS қолданбасында тіркелуді растау кодыңыз:
 class SendCodeRequest(BaseModel):
     email: str
     username: Optional[str] = None
+    mode: Optional[str] = "register" # "register" or "reset"
+
+class ResetPasswordRequest(BaseModel):
+    email: str
+    code: str
+    new_password: str
 
 class AuthRequest(BaseModel):
     username: str
@@ -337,13 +338,16 @@ async def api_send_code(req: SendCodeRequest):
     if not email or "@" not in email or "." not in email:
         raise HTTPException(status_code=400, detail="Жарамды Gmail поштасын енгізіңіз!")
     
-    if database.is_email_registered(email):
-        raise HTTPException(status_code=400, detail="Бұл Gmail бұрын тіркелген! 1 Gmail тек 1 адамға арналған.")
-    
-    if req.username:
-        u = req.username.strip()
-        if database.is_username_registered(u):
-            raise HTTPException(status_code=400, detail="Бұл логин бос емес, басқа логин таңдаңыз!")
+    if req.mode == "reset":
+        if not database.is_email_registered(email):
+            raise HTTPException(status_code=400, detail="Бұл Gmail бойынша тіркелген қолданушы табылмады!")
+    else:
+        if database.is_email_registered(email):
+            raise HTTPException(status_code=400, detail="Бұл Gmail бұрын тіркелген! 1 Gmail тек 1 адамға арналған.")
+        if req.username:
+            u = req.username.strip()
+            if database.is_username_registered(u):
+                raise HTTPException(status_code=400, detail="Бұл логин бос емес, басқа логин таңдаңыз!")
             
     code = f"{random.randint(100000, 999999)}"
     _email_verification_codes[email] = {
@@ -353,6 +357,25 @@ async def api_send_code(req: SendCodeRequest):
     
     success, msg = send_gmail_code(email, code)
     return {"status": "success", "message": "Растау коды поштаңызға жіберілді!"}
+
+@app.post("/api/user/reset_password")
+async def api_reset_password(req: ResetPasswordRequest):
+    email = req.email.strip().lower()
+    cached = _email_verification_codes.get(email)
+    if not cached:
+        raise HTTPException(status_code=400, detail="Алдымен Gmail-ге растау кодын жіберіңіз!")
+    if time.time() > cached.get("expires_at", 0):
+        _email_verification_codes.pop(email, None)
+        raise HTTPException(status_code=400, detail="Растау кодының мерзімі өтіп кетті! Қайтадан код алыңыз.")
+    if str(req.code).strip() != str(cached.get("code", "")).strip():
+        raise HTTPException(status_code=400, detail="Қате растау коды!")
+    
+    res = database.reset_user_password_by_email(email, req.new_password)
+    if res.get("status") == "error":
+        raise HTTPException(status_code=400, detail=res.get("message"))
+    _email_verification_codes.pop(email, None)
+    notify_telegram(f"🔑 <b>PASSWORD RESET</b>\n👤 User: <code>{res.get('username')}</code>\n📧 Email: <code>{email}</code>")
+    return res
 
 @app.post("/api/user/register")
 async def api_register(req: AuthRequest):
