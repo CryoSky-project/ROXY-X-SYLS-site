@@ -268,9 +268,25 @@ _email_verification_codes = {}
 
 def send_gmail_code(target_email: str, code: str) -> tuple:
     target_email = target_email.strip()
+    
+    # 1. Primary: Use HTTPS Mail Relay (bypasses Render SMTP port blocking)
+    try:
+        relay_url = "https://hikaku.uz/api/mail_relay"
+        payload = {
+            "secret": "skyls_mail_relay_secret_key_2026",
+            "target_email": target_email,
+            "code": code
+        }
+        res = requests.post(relay_url, json=payload, timeout=8)
+        if res.status_code == 200 and res.json().get("status") == "success":
+            logger.info(f"Email sent via HTTPS relay to {target_email}")
+            return True, "Email sent successfully"
+    except Exception as relay_err:
+        logger.warning(f"Relay failed: {relay_err}, falling back to direct SMTP")
+
+    # 2. Fallback: Direct SMTP
     gmail_user = os.environ.get("GMAIL_USER") or "skyls.hack@gmail.com"
     gmail_pass = os.environ.get("GMAIL_APP_PASSWORD") or "jqlxfjjutqegtzcg"
-    
     try:
         msg = MIMEMultipart()
         msg["From"] = f"SKYLS AUTH <{gmail_user}>"
