@@ -1012,6 +1012,17 @@ def register_user(username: str, password: str, device_id: str = "", email: str 
                     conn.close()
                     return {"status": "error", "message": "Бұл Gmail бұрын тіркелген! 1 Gmail тек 1 адамға арналған."}
         
+        # Check max 5 accounts per device
+        if device_id:
+            if is_postgres:
+                cursor.execute("SELECT COUNT(*) FROM users WHERE device_id = %s", (device_id,))
+            else:
+                cursor.execute("SELECT COUNT(*) FROM users WHERE device_id = ?", (device_id,))
+            cnt_row = cursor.fetchone()
+            if cnt_row and cnt_row[0] >= 5:
+                conn.close()
+                return {"status": "error", "message": "Сіз әлдеқашан 5 аккаунттан көп аккаунт ашқансыз!"}
+        
         pwd_hash = _hash_password(password)
         now = datetime.utcnow()
         created_at = now if is_postgres else now.isoformat()
@@ -1177,21 +1188,145 @@ def get_all_users() -> list:
     conn = get_connection()
     cursor = conn.cursor()
     try:
-        cursor.execute("SELECT username, balance, role, created_at FROM users ORDER BY created_at DESC")
+        cursor.execute("SELECT username, balance, role, created_at, email, device_id, google_id FROM users ORDER BY created_at DESC")
         rows = cursor.fetchall()
+        
+        # Get set of banned devices
+        try:
+            cursor.execute("SELECT device_id FROM banned_users")
+            banned_devices = set(r[0] for r in cursor.fetchall())
+        except Exception:
+            banned_devices = set()
+
+        # Get active keys map
+        active_keys_map = {}
+        try:
+            cursor.execute("""
+                SELECT au.device_id, au.key, lk.expires_at, pf.file_name
+                FROM active_users au
+                LEFT JOIN license_keys lk ON au.key = lk.key
+                LEFT JOIN patch_files pf ON lk.file_id = pf.id
+            """)
+            for row in cursor.fetchall():
+                d_id = row[0]
+                if d_id and d_id not in active_keys_map:
+                    active_keys_map[d_id] = {
+                        "key": row[1],
+                        "expires_at": str(row[2]) if row[2] else "",
+                        "file_name": row[3] or ""
+                    }
+        except Exception:
+            pass
+
         conn.close()
         result = []
         for r in rows:
+            dev_id = r[5] or ""
+            is_banned = dev_id in banned_devices if dev_id else False
+            act_info = active_keys_map.get(dev_id, None)
             result.append({
                 "username": r[0],
                 "balance": float(r[1] or 0.0),
                 "role": r[2] or "user",
-                "created_at": str(r[3])
+                "created_at": str(r[3]),
+                "email": r[4] or "",
+                "device_id": dev_id,
+                "google_id": r[6] or "",
+                "is_banned": is_banned,
+                "active_key": act_info["key"] if act_info else None,
+                "key_expires_at": act_info["expires_at"] if act_info else None,
+                "key_file": act_info["file_name"] if act_info else None
             })
         return result
-    except Exception:
+    except Exception as e:
         conn.close()
+        print(f"get_all_users error: {e}")
         return []
+
+def update_user_by_admin(target_username: str, new_username: str = "", new_email: str = None, new_password: str = "", new_role: str = "", new_balance: float = None) -> dict:
+    conn = get_connection()
+    cursor = conn.cursor()
+    is_postgres = _using_postgres
+    try:
+        if is_postgres:
+            cursor.execute("SELECT username FROM users WHERE username = %s", (target_username,))
+        else:
+            cursor.execute("SELECT username FROM users WHERE username = ?", (target_username,))
+        if not cursor.fetchone():
+            conn.close()
+            return {"status": "error", "message": "User not found"}
+        
+        updates = []
+        params = []
+        
+        if new_username and new_username.strip() and new_username.strip() != target_username:
+            u_clean = new_username.strip()
+            if is_postgres:
+                cursor.execute("SELECT username FROM users WHERE LOWER(username) = LOWER(%s) AND username != %s", (u_clean, target_username))
+            else:
+                cursor.execute("SELECT username FROM users WHERE LOWER(username) = LOWER(?) AND username != ?", (u_clean, target_username))
+            if cursor.fetchone():
+                conn.close()
+                return {"status": "error", "message": "Username already taken"}
+            updates.append("username = %s" if is_postgres else "username = ?")
+            params.append(u_clean)
+            
+        if new_email is not None:
+            clean_email = new_email.strip().lower() if new_email.strip() else None
+            updates.append("email = %s" if is_postgres else "email = ?")
+            params.append(clean_email)
+            
+        if new_password and new_password.strip():
+            updates.append("password_hash = %s" if is_postgres else "password_hash = ?")
+            params.append(_hash_password(new_password.strip()))
+            
+        if new_role and new_role.strip():
+            updates.append("role = %s" if is_postgres else "role = ?")
+            params.append(new_role.strip())
+            
+        if new_balance is not None:
+            updates.append("balance = %s" if is_postgres else "balance = ?")
+            params.append(float(new_balance))
+            
+        if updates:
+            params.append(target_username)
+            sql = f"UPDATE users SET {', '.join(updates)} WHERE username = {'%s' if is_postgres else '?'}"
+            cursor.execute(sql, tuple(params))
+            conn.commit()
+            
+        conn.close()
+        return {"status": "success", "message": "User updated successfully"}
+    except Exception as e:
+        conn.close()
+        return {"status": "error", "message": str(e)}
+
+def delete_user_by_admin(username: str) -> dict:
+    conn = get_connection()
+    cursor = conn.cursor()
+    is_postgres = _using_postgres
+    try:
+        if is_postgres:
+            cursor.execute("DELETE FROM users WHERE username = %s", (username,))
+        else:
+            cursor.execute("DELETE FROM users WHERE username = ?", (username,))
+        conn.commit()
+        conn.close()
+        return {"status": "success", "message": f"User {username} deleted"}
+    except Exception as e:
+        conn.close()
+        return {"status": "error", "message": str(e)}
+
+def wipe_all_users() -> dict:
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("DELETE FROM users")
+        conn.commit()
+        conn.close()
+        return {"status": "success", "message": "All users wiped successfully"}
+    except Exception as e:
+        conn.close()
+        return {"status": "error", "message": str(e)}
 
 def set_user_balance(username: str, amount: float, mode: str = "add") -> dict:
     conn = get_connection()
@@ -1330,6 +1465,16 @@ def google_auth_user(email: str, google_id: str, device_id: str) -> dict:
                 conn.commit()
             return {"status": "success", "username": u_name, "balance": float(u_bal or 0.0), "role": u_role, "email": email}
         
+        # Check max 5 accounts per device
+        if device_id:
+            if is_postgres:
+                cursor.execute("SELECT COUNT(*) FROM users WHERE device_id = %s", (device_id,))
+            else:
+                cursor.execute("SELECT COUNT(*) FROM users WHERE device_id = ?", (device_id,))
+            cnt_row = cursor.fetchone()
+            if cnt_row and cnt_row[0] >= 5:
+                return {"status": "error", "message": "Сіз әлдеқашан 5 аккаунттан көп аккаунт ашқансыз!"}
+
         # New Google user: find unique username
         candidate_username = base_username
         suffix = 1

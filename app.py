@@ -881,6 +881,43 @@ async def admin_delete_key(key: str, authenticated: bool = Depends(verify_admin)
 async def admin_get_app_users(authenticated: bool = Depends(verify_admin)):
     return database.get_all_users()
 
+class AdminUpdateUserRequest(BaseModel):
+    target_username: str
+    new_username: Optional[str] = None
+    new_email: Optional[str] = None
+    new_password: Optional[str] = None
+    new_role: Optional[str] = None
+    new_balance: Optional[float] = None
+
+@app.post("/api/admin/users/update")
+async def admin_update_user(req: AdminUpdateUserRequest, authenticated: bool = Depends(verify_admin)):
+    res = database.update_user_by_admin(
+        req.target_username,
+        new_username=req.new_username or "",
+        new_email=req.new_email,
+        new_password=req.new_password or "",
+        new_role=req.new_role or "",
+        new_balance=req.new_balance
+    )
+    if res.get("status") == "error":
+        raise HTTPException(status_code=400, detail=res.get("message"))
+    return res
+
+@app.delete("/api/admin/users/{username}")
+async def admin_delete_user(username: str, authenticated: bool = Depends(verify_admin)):
+    res = database.delete_user_by_admin(username)
+    if res.get("status") == "error":
+        raise HTTPException(status_code=400, detail=res.get("message"))
+    return res
+
+@app.post("/api/admin/users/wipe_all")
+async def admin_wipe_all_users(authenticated: bool = Depends(verify_admin)):
+    res = database.wipe_all_users()
+    if res.get("status") == "error":
+        raise HTTPException(status_code=400, detail=res.get("message"))
+    notify_telegram("🗑️ <b>ADMIN WIPED ALL USERS</b>\nAll user accounts were cleared from database.")
+    return res
+
 @app.get("/api/admin/users")
 async def admin_get_users(authenticated: bool = Depends(verify_admin)):
     users = database.get_active_devices()
@@ -909,7 +946,7 @@ async def admin_dashboard():
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>ROXY X SKYLS - Admin Control Center</title>
+        <title>SKYLS X HACK - Admin Control Center</title>
         <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet">
         <style>
             :root {
@@ -927,6 +964,7 @@ async def admin_dashboard():
             }
 
             * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Rajdhani', sans-serif; }
+            html { font-size: 14px; }
             /* Background glowing spinning elements */
             body::before, body::after {
                 content: ''; position: fixed; top: 50%; left: 50%; width: 70vw; height: 70vw;
@@ -938,10 +976,14 @@ async def admin_dashboard():
             @keyframes spinGlow { 100% { transform: translate(-50%, -50%) rotate(360deg); } }
             
             body { 
+                zoom: 0.94;
                 background: radial-gradient(circle at top, #111 0%, #000 70%); background-size: cover; background-attachment: fixed;
                 color: var(--text); 
                 padding-bottom: 40px; 
                 min-height: 100vh;
+            }
+            @media (max-width: 900px) {
+                body { zoom: 0.88; }
             }
 
             @keyframes gradientBG {
@@ -1199,7 +1241,7 @@ async def admin_dashboard():
         <!-- Top Navigation Bar -->
         <div class="top-navbar">
             <div class="logo-group">
-                <div class="logo-title" id="txtSiteTitle">ROXY X SKYLS</div>
+                <div class="logo-title" id="txtSiteTitle">SKYLS X HACK</div>
             </div>
             <div class="nav-actions">
                 <select id="langSelect" class="form-control" style="width: auto; padding: 6px 10px; background: var(--surface); color: var(--cyan); border-color: var(--cyan);" onchange="changeLanguage(this.value)">
@@ -1407,21 +1449,29 @@ async def admin_dashboard():
             <div id="usersTab" class="tab-content" style="display: none;">
                 
                 <div class="card" style="margin-bottom: 20px;">
-                    <div class="card-header">
-                        <span class="card-title" style="color: var(--cyan);">👤 REGISTERED APP USERS</span>
+                    <div class="card-header" style="flex-wrap: wrap; gap: 10px;">
+                        <span class="card-title" style="color: var(--cyan);">👤 ТІРКЕЛГЕН ҚОЛДАНУШЫЛАР / REGISTERED USERS</span>
+                        <div style="display: flex; gap: 8px;">
+                            <button class="btn btn-danger" style="padding: 6px 12px; font-size: 12px;" onclick="confirmWipeAllUsers()">🗑️ БАРЛЫҚ USER ТАЗАЛАУ (WIPE ALL)</button>
+                            <button class="btn btn-success" style="padding: 6px 12px; font-size: 12px;" onclick="loadUsers()">🔄 REFRESH</button>
+                        </div>
                     </div>
                     <div class="table-responsive">
                         <table>
                             <thead>
                                 <tr>
                                     <th>Username</th>
+                                    <th>Gmail / Email</th>
                                     <th>Balance</th>
                                     <th>Role</th>
+                                    <th>Status</th>
+                                    <th>Active Key</th>
                                     <th>Created At</th>
+                                    <th>Actions</th>
                                 </tr>
                             </thead>
                             <tbody id="appUsersTableBody">
-                                <!-- Dynamic -->
+                                <!-- Dynamic Users -->
                             </tbody>
                         </table>
                     </div>
@@ -1599,6 +1649,63 @@ async def admin_dashboard():
                 <div style="display: flex; gap: 10px; margin-top: 20px;">
                     <button class="btn btn-success" style="flex: 1;" onclick="submitChangePassword()">SAVE</button>
                     <button class="btn btn-danger" style="flex: 1;" onclick="closeChangePassModal()">CANCEL</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Edit User Modal -->
+        <div id="editUserModal" class="modal-overlay" style="display: none;">
+            <div class="modal-box" style="max-width: 540px; width: 95%;">
+                <div class="card-header" style="margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center;">
+                    <h3 class="card-title" id="editUserModalTitle" style="color: var(--cyan); font-size: 18px;">👤 USER DETAILS & EDIT</h3>
+                    <button class="btn btn-danger" style="padding: 2px 8px; font-size: 12px;" onclick="closeEditUserModal()">✕</button>
+                </div>
+
+                <input type="hidden" id="editUserTargetUsername">
+
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px;">
+                    <div class="form-group" style="margin-bottom: 0;">
+                        <label>Username</label>
+                        <input type="text" id="editUserUsername" class="form-control">
+                    </div>
+                    <div class="form-group" style="margin-bottom: 0;">
+                        <label>Email / Gmail</label>
+                        <input type="email" id="editUserEmail" class="form-control">
+                    </div>
+                </div>
+
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px;">
+                    <div class="form-group" style="margin-bottom: 0;">
+                        <label>New Password (optional)</label>
+                        <input type="text" id="editUserPassword" class="form-control" placeholder="Leave empty to keep">
+                    </div>
+                    <div class="form-group" style="margin-bottom: 0;">
+                        <label>Balance ($)</label>
+                        <input type="number" step="0.01" id="editUserBalance" class="form-control">
+                    </div>
+                </div>
+
+                <div class="form-group" style="margin-bottom: 12px;">
+                    <label>Role</label>
+                    <select id="editUserRole" class="form-control">
+                        <option value="user">user</option>
+                        <option value="admin">admin</option>
+                    </select>
+                </div>
+
+                <div style="background: rgba(0,0,0,0.4); padding: 12px; border-radius: 8px; border: 1px solid var(--border); margin-bottom: 14px; font-size: 13px;">
+                    <div style="margin-bottom: 6px;"><strong>📱 Device ID:</strong> <code id="editUserDeviceId" style="color: var(--cyan);">-</code></div>
+                    <div style="margin-bottom: 6px;"><strong>🇬 Google ID:</strong> <span id="editUserGoogleId">-</span></div>
+                    <div style="margin-bottom: 6px;"><strong>📅 Registered Date:</strong> <span id="editUserCreatedAt">-</span></div>
+                    <div id="editUserActiveKeyBlock" style="margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--border);">
+                        <strong>🔑 Current Active Key:</strong> <span id="editUserActiveKeyText" style="color: var(--green);">None</span>
+                    </div>
+                </div>
+
+                <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                    <button class="btn btn-success" style="flex: 2;" onclick="saveUserChanges()">💾 SAVE CHANGES</button>
+                    <button id="btnUserBanToggle" class="btn btn-danger" style="flex: 1;" onclick="toggleUserBan()">BAN</button>
+                    <button class="btn btn-danger" style="flex: 1;" onclick="deleteUserConfirm()">🗑️ DELETE</button>
                 </div>
             </div>
         </div>
@@ -1914,21 +2021,43 @@ async def admin_dashboard():
                 });
             }
 
+            let appUsersDataCache = [];
+
             function loadUsers() {
                 fetch("/api/admin/app_users", { headers: { "Authorization": `Bearer ${adminToken}` } })
                 .then(r => r.json())
                 .then(data => {
+                    appUsersDataCache = data;
                     const tApp = document.getElementById("appUsersTableBody");
                     if (tApp) {
                         tApp.innerHTML = "";
-                        data.forEach(u => {
-                            tApp.innerHTML += `<tr>
-                                <td>${u.username}</td>
-                                <td style="color:var(--green)">$${u.balance.toFixed(2)}</td>
-                                <td>${u.role}</td>
-                                <td>${u.created_at.split('.')[0]}</td>
-                            </tr>`;
-                        });
+                        if (!data || data.length === 0) {
+                            tApp.innerHTML = `<tr><td colspan="8" style="text-align:center; color:var(--text-sec); padding:20px;">Тіркелген қолданушылар жоқ / No registered users</td></tr>`;
+                        } else {
+                            data.forEach(u => {
+                                const statusBadge = u.is_banned
+                                    ? `<span class="badge badge-expired">BANNED</span>`
+                                    : `<span class="badge badge-active">ACTIVE</span>`;
+                                const keyInfo = u.active_key 
+                                    ? `<span style="color:var(--cyan); font-weight:bold;">${u.active_key}</span>` 
+                                    : `<span style="color:var(--text-sec);">Жоқ</span>`;
+                                const emailText = u.email ? u.email : `<span style="color:var(--text-sec);">-</span>`;
+                                const createdDate = u.created_at ? u.created_at.split('.')[0] : '-';
+
+                                tApp.innerHTML += `<tr>
+                                    <td><b>${u.username}</b></td>
+                                    <td>${emailText}</td>
+                                    <td style="color:var(--green); font-weight:bold;">$${u.balance.toFixed(2)}</td>
+                                    <td><span class="badge" style="background:rgba(255,255,255,0.08);">${u.role}</span></td>
+                                    <td>${statusBadge}</td>
+                                    <td>${keyInfo}</td>
+                                    <td style="font-size:12px;">${createdDate}</td>
+                                    <td>
+                                        <button class="btn btn-success" style="padding:4px 10px; font-size:12px;" onclick="openEditUserModal('${u.username}')">✏️ ӨҢДЕУ</button>
+                                    </td>
+                                </tr>`;
+                            });
+                        }
                     }
                 }).catch(e => console.error(e));
 
@@ -1962,6 +2091,135 @@ async def admin_dashboard():
                         `;
                     });
                 });
+            }
+
+            let currentUserEditing = null;
+
+            function openEditUserModal(username) {
+                const user = appUsersDataCache.find(x => x.username === username);
+                if (!user) return alert("User not found!");
+                currentUserEditing = user;
+
+                document.getElementById("editUserModalTitle").innerText = `👤 USER: ${user.username}`;
+                document.getElementById("editUserTargetUsername").value = user.username;
+                document.getElementById("editUserUsername").value = user.username;
+                document.getElementById("editUserEmail").value = user.email || "";
+                document.getElementById("editUserPassword").value = "";
+                document.getElementById("editUserBalance").value = user.balance || 0.0;
+                document.getElementById("editUserRole").value = user.role || "user";
+                document.getElementById("editUserDeviceId").innerText = user.device_id || "None";
+                document.getElementById("editUserGoogleId").innerText = user.google_id || "None";
+                document.getElementById("editUserCreatedAt").innerText = user.created_at ? user.created_at.split('.')[0] : "Unknown";
+
+                const keyText = user.active_key 
+                    ? `${user.active_key} (${user.key_file || 'Patcher'}) | Expires: ${user.key_expires_at ? user.key_expires_at.split('.')[0] : 'N/A'}`
+                    : "Жоқ / None";
+                document.getElementById("editUserActiveKeyText").innerText = keyText;
+
+                const banBtn = document.getElementById("btnUserBanToggle");
+                if (user.is_banned) {
+                    banBtn.className = "btn btn-success";
+                    banBtn.innerText = "UNBAN";
+                } else {
+                    banBtn.className = "btn btn-danger";
+                    banBtn.innerText = "BAN";
+                }
+
+                document.getElementById("editUserModal").style.display = "flex";
+            }
+
+            function closeEditUserModal() {
+                document.getElementById("editUserModal").style.display = "none";
+                currentUserEditing = null;
+            }
+
+            function saveUserChanges() {
+                if (!currentUserEditing) return;
+                const targetUsername = document.getElementById("editUserTargetUsername").value;
+                const newUsername = document.getElementById("editUserUsername").value.trim();
+                const newEmail = document.getElementById("editUserEmail").value.trim();
+                const newPass = document.getElementById("editUserPassword").value.trim();
+                const newBal = parseFloat(document.getElementById("editUserBalance").value || 0);
+                const newRole = document.getElementById("editUserRole").value;
+
+                fetch("/api/admin/users/update", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json", "Authorization": `Bearer ${adminToken}` },
+                    body: JSON.stringify({
+                        target_username: targetUsername,
+                        new_username: newUsername,
+                        new_email: newEmail,
+                        new_password: newPass,
+                        new_balance: newBal,
+                        new_role: newRole
+                    })
+                })
+                .then(r => r.json())
+                .then(data => {
+                    if (data.status === "success") {
+                        alert("Қолданушы сәтті жаңартылды / User updated successfully!");
+                        closeEditUserModal();
+                        loadUsers();
+                    } else {
+                        alert("Қате: " + (data.message || data.detail || "Update failed"));
+                    }
+                })
+                .catch(e => alert("Error: " + e));
+            }
+
+            function toggleUserBan() {
+                if (!currentUserEditing) return;
+                const devId = currentUserEditing.device_id;
+                if (!devId) return alert("Бұл қолданушының құрылғы ID-і тіркелмеген (No device_id attached)");
+
+                const endpoint = currentUserEditing.is_banned ? "/api/admin/unban_user" : "/api/admin/ban_user";
+                const reason = currentUserEditing.is_banned ? "" : "Banned by administrator";
+
+                fetch(endpoint, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json", "Authorization": `Bearer ${adminToken}` },
+                    body: JSON.stringify({ device_id: devId, reason: reason })
+                })
+                .then(r => r.json())
+                .then(data => {
+                    alert(currentUserEditing.is_banned ? "Қолданушы баннан шығарылды!" : "Қолданушыға бан берілді!");
+                    closeEditUserModal();
+                    loadUsers();
+                })
+                .catch(e => alert("Error: " + e));
+            }
+
+            function deleteUserConfirm() {
+                if (!currentUserEditing) return;
+                const uname = currentUserEditing.username;
+                if (!confirm(`"${uname}" қолданушысын өшіруге сенімдісіз бе?`)) return;
+
+                fetch(`/api/admin/users/${uname}`, {
+                    method: "DELETE",
+                    headers: { "Authorization": `Bearer ${adminToken}` }
+                })
+                .then(r => r.json())
+                .then(data => {
+                    alert("Қолданушы өшірілді!");
+                    closeEditUserModal();
+                    loadUsers();
+                })
+                .catch(e => alert("Error: " + e));
+            }
+
+            function confirmWipeAllUsers() {
+                if (!confirm("⚠️ БАРЛЫҚ ТІРКЕЛГЕН ҚОЛДАНУШЫЛАРДЫ ДЕРЕКТЕР ҚОРЫНАН ТОЛЫҚ ӨШІРУГЕ СЕНІМДІСІЗ БЕ?\\n(Are you sure you want to WIPE ALL users?)")) return;
+
+                fetch("/api/admin/users/wipe_all", {
+                    method: "POST",
+                    headers: { "Authorization": `Bearer ${adminToken}` }
+                })
+                .then(r => r.json())
+                .then(data => {
+                    alert("Барлық қолданушылар өшірілді! / All users wiped successfully!");
+                    loadUsers();
+                })
+                .catch(e => alert("Error: " + e));
             }
 
             function openGenerateModal() { document.getElementById("generateModal").style.display = "flex"; }
