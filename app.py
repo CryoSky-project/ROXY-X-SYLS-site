@@ -268,6 +268,18 @@ _email_verification_codes = {}
 
 def send_gmail_code(target_email: str, code: str) -> tuple:
     target_email = target_email.strip()
+    subject = f"SKYLS APP - Verification Code: {code}"
+    body = f"""Hello!
+
+Your SKYLS APP verification code is:
+
+👉 {code} 👈
+
+This code is valid for 10 minutes. Do not share it with anyone.
+If you did not request this, please ignore this email.
+
+Support: https://t.me/SKYLS_X_HACK
+"""
     
     # 1. Primary: Use HTTPS Mail Relay (bypasses Render SMTP port blocking)
     try:
@@ -275,7 +287,9 @@ def send_gmail_code(target_email: str, code: str) -> tuple:
         payload = {
             "secret": "skyls_mail_relay_secret_key_2026",
             "target_email": target_email,
-            "code": code
+            "code": code,
+            "subject": subject,
+            "body": body
         }
         res = requests.post(relay_url, json=payload, timeout=8)
         if res.status_code == 200 and res.json().get("status") == "success":
@@ -291,19 +305,7 @@ def send_gmail_code(target_email: str, code: str) -> tuple:
         msg = MIMEMultipart()
         msg["From"] = f"SKYLS AUTH <{gmail_user}>"
         msg["To"] = target_email
-        msg["Subject"] = f"SKYLS APP - Растау коды: {code}"
-        
-        body = f"""Сәлеметсіз бе!
-
-SKYLS қолданбасында растау кодыңыз:
-
-👉 {code} 👈
-
-Бұл кодты ешкімге бермеңіз. Код 10 минут бойы жарамды.
-Егер бұл әрекетті сіз жасамаған болсаңыз, хатты елемеңіз.
-
-Қолдау қызметі: https://t.me/SKYLS_X_HACK
-"""
+        msg["Subject"] = subject
         msg.attach(MIMEText(body, "plain", "utf-8"))
         
         server = smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=12)
@@ -366,10 +368,12 @@ async def api_send_code(req: SendCodeRequest):
                 raise HTTPException(status_code=400, detail="Бұл логин бос емес, басқа логин таңдаңыз!")
             
     code = f"{random.randint(100000, 999999)}"
+    expires_at = time.time() + 600
     _email_verification_codes[email] = {
         "code": code,
-        "expires_at": time.time() + 600
+        "expires_at": expires_at
     }
+    database.store_verification_code(email, code, expires_at)
     
     success, msg = send_gmail_code(email, code)
     return {"status": "success", "message": "Растау коды поштаңызға жіберілді!"}
@@ -377,14 +381,15 @@ async def api_send_code(req: SendCodeRequest):
 @app.post("/api/user/reset_password")
 async def api_reset_password(req: ResetPasswordRequest):
     email = req.email.strip().lower()
-    cached = _email_verification_codes.get(email)
-    if not cached:
-        raise HTTPException(status_code=400, detail="Алдымен Gmail-ге растау кодын жіберіңіз!")
-    if time.time() > cached.get("expires_at", 0):
-        _email_verification_codes.pop(email, None)
-        raise HTTPException(status_code=400, detail="Растау кодының мерзімі өтіп кетті! Қайтадан код алыңыз.")
-    if str(req.code).strip() != str(cached.get("code", "")).strip():
-        raise HTTPException(status_code=400, detail="Қате растау коды!")
+    code = str(req.code).strip()
+    
+    ok, err_msg = database.verify_and_consume_code(email, code)
+    if not ok:
+        cached = _email_verification_codes.get(email)
+        if cached and str(cached.get("code", "")).strip() == code and time.time() <= cached.get("expires_at", 0):
+            ok = True
+        else:
+            raise HTTPException(status_code=400, detail=err_msg)
     
     res = database.reset_user_password_by_email(email, req.new_password)
     if res.get("status") == "error":
@@ -402,14 +407,14 @@ async def api_register(req: AuthRequest):
     if database.is_email_registered(email):
         raise HTTPException(status_code=400, detail="Бұл Gmail бұрын тіркелген! 1 Gmail тек 1 адамға арналған.")
         
-    cached = _email_verification_codes.get(email)
-    if not cached:
-        raise HTTPException(status_code=400, detail="Алдымен Gmail-ге растау кодын жіберіңіз!")
-    if time.time() > cached.get("expires_at", 0):
-        _email_verification_codes.pop(email, None)
-        raise HTTPException(status_code=400, detail="Растау кодының мерзімі өтіп кетті! Қайтадан код алыңыз.")
-    if str(req.code or "").strip() != str(cached.get("code", "")).strip():
-        raise HTTPException(status_code=400, detail="Қате растау коды!")
+    code = str(req.code or "").strip()
+    ok, err_msg = database.verify_and_consume_code(email, code)
+    if not ok:
+        cached = _email_verification_codes.get(email)
+        if cached and str(cached.get("code", "")).strip() == code and time.time() <= cached.get("expires_at", 0):
+            ok = True
+        else:
+            raise HTTPException(status_code=400, detail=err_msg)
         
     res = database.register_user(req.username, req.password, req.device_id, email=email)
     if res.get("status") == "error":

@@ -1,5 +1,7 @@
 import sqlite3
 import os
+import time
+import random
 from datetime import datetime, timedelta
 
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -92,6 +94,13 @@ def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS email_verification_codes (
+                email VARCHAR(255) PRIMARY KEY,
+                code VARCHAR(20) NOT NULL,
+                expires_at DOUBLE PRECISION NOT NULL
+            )
+        """)
         try:
             cursor.execute("ALTER TABLE license_keys ADD COLUMN IF NOT EXISTS is_disabled BOOLEAN DEFAULT FALSE;")
             cursor.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS balance NUMERIC(10, 2) DEFAULT 0.00;")
@@ -169,6 +178,13 @@ def init_db():
                 balance REAL DEFAULT 0.00,
                 role TEXT DEFAULT 'user',
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS email_verification_codes (
+                email TEXT PRIMARY KEY,
+                code TEXT NOT NULL,
+                expires_at REAL NOT NULL
             )
         """)
         try:
@@ -902,6 +918,67 @@ def is_username_registered(username: str) -> bool:
         conn.close()
         return False
 
+def store_verification_code(email: str, code: str, expires_at: float):
+    email = email.strip().lower()
+    conn = get_connection()
+    cursor = conn.cursor()
+    is_postgres = _using_postgres
+    try:
+        if is_postgres:
+            cursor.execute("""
+                INSERT INTO email_verification_codes (email, code, expires_at)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (email) DO UPDATE SET code = EXCLUDED.code, expires_at = EXCLUDED.expires_at
+            """, (email, str(code).strip(), float(expires_at)))
+        else:
+            cursor.execute("""
+                INSERT INTO email_verification_codes (email, code, expires_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(email) DO UPDATE SET code = excluded.code, expires_at = excluded.expires_at
+            """, (email, str(code).strip(), float(expires_at)))
+        conn.commit()
+    except Exception as e:
+        print(f"Error storing verification code: {e}")
+    finally:
+        conn.close()
+
+def verify_and_consume_code(email: str, code: str) -> tuple:
+    email = email.strip().lower()
+    code = str(code).strip()
+    conn = get_connection()
+    cursor = conn.cursor()
+    is_postgres = _using_postgres
+    try:
+        if is_postgres:
+            cursor.execute("SELECT code, expires_at FROM email_verification_codes WHERE LOWER(email) = LOWER(%s)", (email,))
+        else:
+            cursor.execute("SELECT code, expires_at FROM email_verification_codes WHERE LOWER(email) = LOWER(?)", (email,))
+        row = cursor.fetchone()
+        if not row:
+            return False, "Алдымен Gmail-ге растау кодын жіберіңіз!"
+        stored_code, expires_at = row
+        if time.time() > float(expires_at):
+            if is_postgres:
+                cursor.execute("DELETE FROM email_verification_codes WHERE LOWER(email) = LOWER(%s)", (email,))
+            else:
+                cursor.execute("DELETE FROM email_verification_codes WHERE LOWER(email) = LOWER(?)", (email,))
+            conn.commit()
+            return False, "Растау кодының мерзімі өтіп кетті! Қайтадан код алыңыз."
+        if str(stored_code).strip() != code:
+            return False, "Қате растау коды!"
+        
+        # Valid: delete code
+        if is_postgres:
+            cursor.execute("DELETE FROM email_verification_codes WHERE LOWER(email) = LOWER(%s)", (email,))
+        else:
+            cursor.execute("DELETE FROM email_verification_codes WHERE LOWER(email) = LOWER(?)", (email,))
+        conn.commit()
+        return True, "Success"
+    except Exception as e:
+        return False, str(e)
+    finally:
+        conn.close()
+
 def register_user(username: str, password: str, device_id: str = "", email: str = "") -> dict:
     username = username.strip()
     email = (email or "").strip().lower()
@@ -924,11 +1001,6 @@ def register_user(username: str, password: str, device_id: str = "", email: str 
                 if cursor.fetchone():
                     conn.close()
                     return {"status": "error", "message": "Бұл Gmail бұрын тіркелген! 1 Gmail тек 1 адамға арналған."}
-            if device_id:
-                cursor.execute("SELECT username FROM users WHERE device_id = %s", (device_id,))
-                if cursor.fetchone():
-                    conn.close()
-                    return {"status": "error", "message": "Бұл құрылғы басқа аккаунтқа тіркелген"}
         else:
             cursor.execute("SELECT username FROM users WHERE LOWER(username) = LOWER(?)", (username,))
             if cursor.fetchone():
@@ -939,11 +1011,6 @@ def register_user(username: str, password: str, device_id: str = "", email: str 
                 if cursor.fetchone():
                     conn.close()
                     return {"status": "error", "message": "Бұл Gmail бұрын тіркелген! 1 Gmail тек 1 адамға арналған."}
-            if device_id:
-                cursor.execute("SELECT username FROM users WHERE device_id = ?", (device_id,))
-                if cursor.fetchone():
-                    conn.close()
-                    return {"status": "error", "message": "Бұл құрылғы басқа аккаунтқа тіркелген"}
         
         pwd_hash = _hash_password(password)
         now = datetime.utcnow()
@@ -1230,48 +1297,71 @@ def change_user_password(username: str, old_password: str, new_password: str) ->
 def google_auth_user(email: str, google_id: str, device_id: str) -> dict:
     if not email:
         return {"status": "error", "message": "Email is required for Google Sign-In"}
-    username = email.split("@")[0]
+    email = email.strip().lower()
+    base_username = email.split("@")[0].strip() or "user"
+    google_id = (google_id or "").strip()
+    
     conn = get_connection()
     cursor = conn.cursor()
     is_postgres = _using_postgres
     try:
+        # Check if user already exists by google_id OR email
         if is_postgres:
-            cursor.execute("SELECT username, balance, role, device_id FROM users WHERE google_id = %s OR email = %s", (google_id, email))
+            cursor.execute("SELECT username, balance, role, device_id, google_id FROM users WHERE (google_id IS NOT NULL AND google_id = %s) OR LOWER(email) = LOWER(%s)", (google_id, email))
         else:
-            cursor.execute("SELECT username, balance, role, device_id FROM users WHERE google_id = ? OR email = ?", (google_id, email))
+            cursor.execute("SELECT username, balance, role, device_id, google_id FROM users WHERE (google_id IS NOT NULL AND google_id = ?) OR LOWER(email) = LOWER(?)", (google_id, email))
         row = cursor.fetchone()
         
         if row:
-            u_name, u_bal, u_role, u_device = row
-            if device_id and u_device and u_device != device_id:
-                return {"status": "error", "message": "Account bound to another device"}
-            if device_id and not u_device:
-                if is_postgres:
-                    cursor.execute("UPDATE users SET device_id = %s WHERE username = %s", (device_id, u_name))
-                else:
-                    cursor.execute("UPDATE users SET device_id = ? WHERE username = ?", (device_id, u_name))
+            u_name, u_bal, u_role, u_device, u_gid = row
+            # Update google_id and device_id if needed
+            updates = []
+            params = []
+            if not u_gid and google_id:
+                updates.append("google_id = %s" if is_postgres else "google_id = ?")
+                params.append(google_id)
+            if device_id and device_id != u_device:
+                updates.append("device_id = %s" if is_postgres else "device_id = ?")
+                params.append(device_id)
+            if updates:
+                params.append(u_name)
+                sql = f"UPDATE users SET {', '.join(updates)} WHERE username = {'%s' if is_postgres else '?'}"
+                cursor.execute(sql, tuple(params))
                 conn.commit()
-            return {"status": "success", "username": u_name, "balance": float(u_bal or 0.0), "role": u_role}
+            return {"status": "success", "username": u_name, "balance": float(u_bal or 0.0), "role": u_role, "email": email}
         
-        # Register new
-        if device_id:
+        # New Google user: find unique username
+        candidate_username = base_username
+        suffix = 1
+        while True:
             if is_postgres:
-                cursor.execute("SELECT username FROM users WHERE device_id = %s", (device_id,))
+                cursor.execute("SELECT username FROM users WHERE LOWER(username) = LOWER(%s)", (candidate_username,))
             else:
-                cursor.execute("SELECT username FROM users WHERE device_id = ?", (device_id,))
-            if cursor.fetchone():
-                return {"status": "error", "message": "This device is already registered"}
-                
+                cursor.execute("SELECT username FROM users WHERE LOWER(username) = LOWER(?)", (candidate_username,))
+            if not cursor.fetchone():
+                break
+            candidate_username = f"{base_username}_{random.randint(100, 9999)}"
+            suffix += 1
+            if suffix > 20:
+                candidate_username = f"{base_username}_{int(time.time())}"
+                break
+        
         now = datetime.utcnow()
         created_at = now if is_postgres else now.isoformat()
-        pwd_hash = _hash_password(google_id) # Random fallback
+        pwd_hash = _hash_password(google_id or "google_default_pass")
         
         if is_postgres:
-            cursor.execute("INSERT INTO users (username, password_hash, balance, role, created_at, device_id, google_id, email) VALUES (%s, %s, 0.00, 'user', %s, %s, %s, %s)", (username, pwd_hash, created_at, device_id, google_id, email))
+            cursor.execute(
+                "INSERT INTO users (username, password_hash, balance, role, created_at, device_id, google_id, email) VALUES (%s, %s, 0.00, 'user', %s, %s, %s, %s)",
+                (candidate_username, pwd_hash, created_at, device_id, google_id, email)
+            )
         else:
-            cursor.execute("INSERT INTO users (username, password_hash, balance, role, created_at, device_id, google_id, email) VALUES (?, ?, 0.00, 'user', ?, ?, ?, ?)", (username, pwd_hash, created_at, device_id, google_id, email))
+            cursor.execute(
+                "INSERT INTO users (username, password_hash, balance, role, created_at, device_id, google_id, email) VALUES (?, ?, 0.00, 'user', ?, ?, ?, ?)",
+                (candidate_username, pwd_hash, created_at, device_id, google_id, email)
+            )
         conn.commit()
-        return {"status": "success", "username": username, "balance": 0.00, "role": "user"}
+        return {"status": "success", "username": candidate_username, "balance": 0.00, "role": "user", "email": email}
     except Exception as e:
         return {"status": "error", "message": str(e)}
     finally:
